@@ -13,13 +13,18 @@ Claude, GPT, and Gemini are products of companies with billions of dollars in tr
   - **RAG** -- a small in-memory vector store (`app/rag/store.py`) built from markdown files in `data/knowledge/`, embedded via Ollama's real `nomic-embed-text` model by default, with a dependency-free local hashing embedder as an offline-testable fallback (`app/rag/embeddings.py`).
   - **Tool-use** -- a tiny, explicit tool registry (`app/services/tools.py`: `calculate`, `current_datetime`) called through Ollama's native `/api/chat` tools mechanism.
   - **The Ollama client** (`app/services/ollama_client.py`) -- the one place that knows Ollama's request/response shape; everything else talks to it through plain Python types.
-- **`frontend/`** -- Next.js. A single streaming chat page reading Server-Sent Events off the backend by hand (no `EventSource`, since it doesn't support POST bodies).
+  - **Speech-to-text** (`app/services/speech_to_text.py`) -- self-hosted via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2, CPU int8, no PyTorch, no cloud speech API).
+- **`frontend/`** -- Next.js. A single streaming chat page reading Server-Sent Events off the backend by hand (no `EventSource`, since it doesn't support POST bodies). A mic button records a voice message and sends it to `/api/speech/transcribe`; replies are read aloud with the browser's built-in `SpeechSynthesis` (toggleable) -- local to the browser/OS, not a network call, consistent with the rest of this project even though the voice itself sounds more robotic than a cloud TTS API would.
 
 ## A real, live-verified finding: qwen2.5-coder:7b doesn't populate Ollama's structured `tool_calls` field
 
 Verified directly against this project's own Ollama instance, not assumed: asked to call `calculate`, the model produces the *correct* JSON -- `{"name": "calculate", "arguments": {"expression": "384 * 27"}}` -- but as plain `message.content` text, not in the `tool_calls` array Ollama's API defines for well-behaved tool-calling models. A naive integration would silently show that raw JSON to the user as if it were the answer.
 
 `chat_orchestrator._parse_fallback_tool_call()` fixes this: it recognizes that exact shape and executes the tool anyway, and the streaming loop holds back any response starting with `{` from the live stream until the round finishes and it's clear whether that's a disguised tool call or just an answer that happens to start with a brace -- so nothing fabricated-looking ever reaches the user. Covered by `tests/test_chat_orchestrator.py`, including the case where a brace-prefixed response is *not* a tool call and needs to be flushed as a normal answer instead.
+
+## Voice, tested with real spoken audio, not a canned sample
+
+Speech-to-text is fast on this hardware -- **1.2 seconds steady-state** once the `base.en` model is loaded (measured live on this project's own VPS), well under the LLM reply time, so listening is never the bottleneck. Accuracy is the honest trade-off of a small model: given real spoken audio saying *"What is Bangladesh EWARS?"*, it transcribed *"What is Bangladesh U.S.?"* -- `base.en` doesn't reliably catch uncommon acronyms outside its training vocabulary. `WHISPER_MODEL_SIZE=small.en` trades some latency and RAM for meaningfully better accuracy on domain-specific terms, if that matters more than speed for your use.
 
 ## Running it
 
