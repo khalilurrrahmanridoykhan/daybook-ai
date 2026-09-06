@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8300";
-const ASSISTANT_NAME = process.env.NEXT_PUBLIC_ASSISTANT_NAME ?? "Ridoy AI";
+const ASSISTANT_NAME = process.env.NEXT_PUBLIC_ASSISTANT_NAME ?? "DayBook AI";
 
 const EXAMPLE_PROMPTS = ["What can you do?", "Tell me about Ridoy's projects", "What is 384 times 27?"];
 

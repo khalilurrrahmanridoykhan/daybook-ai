@@ -1,4 +1,4 @@
-# Ridoy AI
+# DayBook AI
 
 A self-hosted, open-weight personal AI assistant. Streaming chat, persistent memory, RAG grounding over a small knowledge base, and a tool-use loop -- running entirely on your own infrastructure. No conversation data is ever sent to Anthropic, OpenAI, Google, or any other third-party AI provider; the only "brain" involved is a locally-run [Ollama](https://ollama.com) model.
 
@@ -63,7 +63,7 @@ USE_LOCAL_EMBEDDER=true pytest tests/ -v
 
 **Live at [ai.krrkhan.com](https://ai.krrkhan.com).**
 
-Deployed to a shared VPS that also runs unrelated production services (a separate CommuniPlan/BRAC malaria-surveillance system) -- deliberately isolated from them: its own directory (`~/apps/ridoy-ai`), its own ports (backend 8300, frontend 3300, chosen clear of every port already in use on that box), and its own single nginx site file (`ai-krrkhan-ai.conf`) that was added without opening or editing any of the box's other eight site configs. The only thing shared is the box's pre-existing Ollama daemon, used strictly through its HTTP API -- no changes to its systemd service or already-pulled models.
+Deployed to a shared VPS that also runs unrelated production services (a separate CommuniPlan/BRAC malaria-surveillance system) -- deliberately isolated from them: its own directory (`~/apps/daybook-ai`), its own ports (backend 8300, frontend 3300, chosen clear of every port already in use on that box), and its own single nginx site file (`ai-krrkhan-ai.conf`) that was added without opening or editing any of the box's other eight site configs. The only thing shared is the box's pre-existing Ollama daemon, used strictly through its HTTP API -- no changes to its systemd service or already-pulled models.
 
 Public routing: nginx terminates TLS (Let's Encrypt, auto-renewing) at `ai.krrkhan.com` and proxies `/api/` to the backend, everything else to the frontend -- both on the same origin, so the browser never needs CORS at all. `proxy_buffering off` on the `/api/` location was a deliberate, necessary choice: without it, nginx would buffer the whole SSE response and release it all at once instead of streaming token-by-token. `NEXT_PUBLIC_API_BASE_URL` is empty in production for exactly this reason (relative `/api/...` paths); the old two-port SSH-tunnel setup (no reverse proxy in front) needs an explicit absolute URL instead -- see `frontend/.env.example`.
 

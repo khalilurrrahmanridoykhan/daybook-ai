@@ -8,4 +8,4 @@ The AMR Stewardship Briefing API is a FastAPI service that reads live compliance
 
 Ridoy has also built four native DHIS2 applications: a FHIR Sync Console (a FHIR-to-DHIS2 Immunization Bridge control panel), a Data Share Hub (scoped, revocable external API data sharing), a Data Quality Auditor (metadata-driven RDQA-aligned audits), and the OneHealth Intelligence Platform, an open-source disease-surveillance and early-warning research implementation for Bangladesh covering dengue, measles, HPAI, Nipah, and more, with a mandatory human-approval gate before any DHIS2 write.
 
-Ridoy AI is his own self-hosted, open-weight personal AI assistant -- streaming chat, persistent memory, RAG grounding, and tool-use, running entirely on his own infrastructure with no data sent to any third-party AI provider.
+DayBook AI is his own self-hosted, open-weight personal AI assistant -- streaming chat, persistent memory, RAG grounding, and tool-use, running entirely on his own infrastructure with no data sent to any third-party AI provider.
