@@ -48,8 +48,14 @@ body {
   gap: 8px;
 }
 
-.logout-link {
+.header-actions {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logout-link {
   background: none;
   border: none;
   color: var(--muted);
@@ -61,6 +67,11 @@ body {
 
 .logout-link:hover {
   color: var(--text);
+}
+
+.logout-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .header h1 {

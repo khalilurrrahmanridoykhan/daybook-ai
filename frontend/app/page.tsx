@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8300";
 const ASSISTANT_NAME = process.env.NEXT_PUBLIC_ASSISTANT_NAME ?? "DayBook AI";
 
-const EXAMPLE_PROMPTS = ["What can you do?", "Tell me about Ridoy's projects", "What is 384 times 27?"];
+const EXAMPLE_PROMPTS = ["What can you do?", "What's on my task list today?", "Tell me about my budget"];
+const SESSION_STORAGE_KEY = "daybook_ai_session_id";
 
 type Citation = { document_id: string; title: string; score: number };
 type ToolEvent = { name: string; phase: "call" | "result"; payload: unknown };
@@ -64,18 +65,46 @@ export default function Home() {
   const barRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/chat/sessions`, { method: "POST", credentials: "include" })
-      .then((r) => {
-        // Fallback for the two-port tunnel setup, where middleware.ts can't
-        // see a cookie scoped to the backend's separate origin.
-        if (r.status === 401) {
-          window.location.href = "/login";
-          throw new Error("not logged in");
+    async function init() {
+      const resp0 = await fetch(`${API_BASE}/api/chat/sessions`, { credentials: "include" });
+      // Fallback for the two-port tunnel setup, where middleware.ts can't
+      // see a cookie scoped to the backend's separate origin.
+      if (resp0.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+
+      // Reuse the last session (and its history) across reloads instead of
+      // always starting a fresh, empty chat -- the backend already
+      // persists every session/message in SQLite; this is just the
+      // frontend remembering which one was open.
+      const savedId = localStorage.getItem(SESSION_STORAGE_KEY);
+      const existingSessions: { id: string }[] = resp0.ok ? await resp0.json() : [];
+
+      if (savedId && existingSessions.some((s) => s.id === savedId)) {
+        const historyResp = await fetch(`${API_BASE}/api/chat/sessions/${savedId}/messages`, {
+          credentials: "include",
+        });
+        if (historyResp.ok) {
+          const history: { role: "user" | "assistant"; content: string }[] = await historyResp.json();
+          setMessages(history.map((m) => ({ role: m.role, content: m.content })));
+          setSessionId(savedId);
+          return;
         }
-        return r.json();
-      })
-      .then((data) => setSessionId(data.session_id))
-      .catch(() => setError(`Could not reach ${ASSISTANT_NAME}'s backend at ${API_BASE}.`));
+      }
+
+      // No usable saved session -- start a fresh one.
+      const createResp = await fetch(`${API_BASE}/api/chat/sessions`, { method: "POST", credentials: "include" });
+      if (createResp.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+      const data = await createResp.json();
+      localStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
+      setSessionId(data.session_id);
+    }
+
+    init().catch(() => setError(`Could not reach ${ASSISTANT_NAME}'s backend at ${API_BASE}.`));
   }, []);
 
   useEffect(() => {
@@ -280,17 +309,38 @@ export default function Home() {
         <div className="header-top">
           <h1>{ASSISTANT_NAME}</h1>
           <span className={`status-dot ${connectionState}`} title={connectionState} />
-          <button
-            type="button"
-            className="logout-link"
-            onClick={() => {
-              fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).finally(() => {
-                window.location.href = "/login";
-              });
-            }}
-          >
-            Log out
-          </button>
+          <div className="header-actions">
+            <button
+              type="button"
+              className="logout-link"
+              disabled={busy}
+              onClick={async () => {
+                const resp = await fetch(`${API_BASE}/api/chat/sessions`, { method: "POST", credentials: "include" });
+                if (resp.status === 401) {
+                  window.location.href = "/login";
+                  return;
+                }
+                const data = await resp.json();
+                localStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
+                setSessionId(data.session_id);
+                setMessages([]);
+              }}
+            >
+              New chat
+            </button>
+            <button
+              type="button"
+              className="logout-link"
+              onClick={() => {
+                fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).finally(() => {
+                  localStorage.removeItem(SESSION_STORAGE_KEY);
+                  window.location.href = "/login";
+                });
+              }}
+            >
+              Log out
+            </button>
+          </div>
         </div>
         <p>Self-hosted, open-weight assistant. Nothing here is sent to Anthropic, OpenAI, or Google.</p>
         <label className="speak-toggle">
