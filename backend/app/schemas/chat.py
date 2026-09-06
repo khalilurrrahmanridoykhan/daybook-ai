@@ -11,3 +11,7 @@ class SessionSummary(BaseModel):
     id: str
     title: str
     created_at: str
+
+
+class RenameSessionRequest(BaseModel):
+    title: str

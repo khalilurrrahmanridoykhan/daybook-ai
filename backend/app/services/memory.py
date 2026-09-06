@@ -63,15 +63,25 @@ def session_exists(session_id: str, db_path: str | None = None) -> bool:
     return row is not None
 
 
+def _make_title(message: str, max_len: int = 60) -> str:
+    text = " ".join(message.split())  # collapse newlines/repeated whitespace into one line
+    return text if len(text) <= max_len else text[:max_len].rstrip() + "…"
+
+
 def append_message(session_id: str, role: str, content: str, db_path: str | None = None) -> None:
     with _connect(db_path) as conn:
-        exists = conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
-        if exists is None:
+        row = conn.execute("SELECT title FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
             raise ValueError(f"No session with id {session_id}")
         conn.execute(
             "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
             (session_id, role, content, datetime.now(timezone.utc).isoformat()),
         )
+        # Auto-title from the first user message, same as Claude/ChatGPT --
+        # only while the title is still empty, so a user's own rename (or
+        # an already-titled session) is never silently overwritten.
+        if role == "user" and not row["title"]:
+            conn.execute("UPDATE sessions SET title = ? WHERE id = ?", (_make_title(content), session_id))
 
 
 def get_history(session_id: str, db_path: str | None = None) -> list[dict]:
@@ -87,3 +97,20 @@ def list_sessions(db_path: str | None = None) -> list[dict]:
     with _connect(db_path) as conn:
         rows = conn.execute("SELECT id, title, created_at FROM sessions ORDER BY created_at DESC").fetchall()
     return [dict(r) for r in rows]
+
+
+def delete_session(session_id: str, db_path: str | None = None) -> None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"No session with id {session_id}")
+        conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+
+def rename_session(session_id: str, title: str, db_path: str | None = None) -> None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"No session with id {session_id}")
+        conn.execute("UPDATE sessions SET title = ? WHERE id = ?", (title.strip(), session_id))

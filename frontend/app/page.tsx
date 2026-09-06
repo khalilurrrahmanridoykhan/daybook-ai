@@ -19,6 +19,8 @@ type UIMessage = {
   elapsedMs?: number;
 };
 
+type SessionSummary = { id: string; title: string; created_at: string };
+
 type ChatEvent =
   | { type: "citations"; citations: Citation[] }
   | { type: "delta"; content: string }
@@ -43,6 +45,12 @@ function formatDuration(ms: number): string {
 
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,6 +62,7 @@ export default function Home() {
   const [speakReplies, setSpeakReplies] = useState(true);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -64,47 +73,137 @@ export default function Home() {
   const rafRef = useRef<number | null>(null);
   const barRefs = useRef<(HTMLDivElement | null)[]>([]);
 
+  // Source of truth for "what chats exist" is always this list from the
+  // backend, never localStorage alone -- localStorage only remembers
+  // *which* one was last open, so a reload can never land on a genuinely
+  // empty view as long as any session exists server-side.
+  async function refreshSessions(): Promise<SessionSummary[] | null> {
+    const resp = await fetch(`${API_BASE}/api/chat/sessions`, { credentials: "include" });
+    if (resp.status === 401) {
+      window.location.href = "/login";
+      return null;
+    }
+    const list: SessionSummary[] = resp.ok ? await resp.json() : [];
+    setSessions(list);
+    return list;
+  }
+
+  async function loadSession(id: string) {
+    const historyResp = await fetch(`${API_BASE}/api/chat/sessions/${id}/messages`, { credentials: "include" });
+    if (historyResp.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const history: { role: "user" | "assistant"; content: string }[] = historyResp.ok ? await historyResp.json() : [];
+    setMessages(history.map((m) => ({ role: m.role, content: m.content })));
+    setSessionId(id);
+    localStorage.setItem(SESSION_STORAGE_KEY, id);
+    setMenuOpenId(null);
+    setSidebarOpen(false);
+  }
+
+  async function startNewChat() {
+    const resp = await fetch(`${API_BASE}/api/chat/sessions`, { method: "POST", credentials: "include" });
+    if (resp.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    const data = await resp.json();
+    await refreshSessions();
+    setMessages([]);
+    setSessionId(data.session_id);
+    localStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
+    setMenuOpenId(null);
+    setSidebarOpen(false);
+  }
+
+  async function deleteSession(id: string) {
+    setMenuOpenId(null);
+    const target = sessions.find((s) => s.id === id);
+    const label = target?.title || "this chat";
+    if (!window.confirm(`Delete "${label}"? This can't be undone.`)) return;
+
+    const resp = await fetch(`${API_BASE}/api/chat/sessions/${id}`, { method: "DELETE", credentials: "include" });
+    if (resp.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+
+    const remaining = sessions.filter((s) => s.id !== id);
+    setSessions(remaining);
+
+    if (id === sessionId) {
+      if (remaining.length > 0) {
+        await loadSession(remaining[0].id);
+      } else {
+        await startNewChat();
+      }
+    }
+  }
+
+  function startRename(session: SessionSummary) {
+    setMenuOpenId(null);
+    setEditingId(session.id);
+    setEditingTitle(session.title);
+  }
+
+  async function commitRename(id: string) {
+    const title = editingTitle.trim();
+    setEditingId(null);
+    if (!title) return;
+
+    const current = sessions.find((s) => s.id === id);
+    if (current && current.title === title) return;
+
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)));
+    const resp = await fetch(`${API_BASE}/api/chat/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ title }),
+    });
+    if (resp.status === 401) {
+      window.location.href = "/login";
+      return;
+    }
+    if (!resp.ok) {
+      // Roll back on failure rather than leave the sidebar showing a title
+      // that was never actually saved.
+      refreshSessions();
+    }
+  }
+
+  useEffect(() => {
+    if (editingId) renameInputRef.current?.select();
+  }, [editingId]);
+
+  // Close any open 3-dot menu on an outside click.
+  useEffect(() => {
+    if (!menuOpenId) return;
+    function onDocClick(e: MouseEvent) {
+      if (!(e.target as HTMLElement).closest(".session-menu")) setMenuOpenId(null);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [menuOpenId]);
+
   useEffect(() => {
     async function init() {
-      const resp0 = await fetch(`${API_BASE}/api/chat/sessions`, { credentials: "include" });
-      // Fallback for the two-port tunnel setup, where middleware.ts can't
-      // see a cookie scoped to the backend's separate origin.
-      if (resp0.status === 401) {
-        window.location.href = "/login";
-        return;
-      }
+      const list = await refreshSessions();
+      if (list === null) return; // redirected to /login
 
-      // Reuse the last session (and its history) across reloads instead of
-      // always starting a fresh, empty chat -- the backend already
-      // persists every session/message in SQLite; this is just the
-      // frontend remembering which one was open.
       const savedId = localStorage.getItem(SESSION_STORAGE_KEY);
-      const existingSessions: { id: string }[] = resp0.ok ? await resp0.json() : [];
+      const target = list.find((s) => s.id === savedId) ?? list[0];
 
-      if (savedId && existingSessions.some((s) => s.id === savedId)) {
-        const historyResp = await fetch(`${API_BASE}/api/chat/sessions/${savedId}/messages`, {
-          credentials: "include",
-        });
-        if (historyResp.ok) {
-          const history: { role: "user" | "assistant"; content: string }[] = await historyResp.json();
-          setMessages(history.map((m) => ({ role: m.role, content: m.content })));
-          setSessionId(savedId);
-          return;
-        }
+      if (target) {
+        await loadSession(target.id);
+      } else {
+        await startNewChat();
       }
-
-      // No usable saved session -- start a fresh one.
-      const createResp = await fetch(`${API_BASE}/api/chat/sessions`, { method: "POST", credentials: "include" });
-      if (createResp.status === 401) {
-        window.location.href = "/login";
-        return;
-      }
-      const data = await createResp.json();
-      localStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
-      setSessionId(data.session_id);
     }
 
     init().catch(() => setError(`Could not reach ${ASSISTANT_NAME}'s backend at ${API_BASE}.`));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -123,6 +222,8 @@ export default function Home() {
   async function sendMessage(overrideText?: string) {
     const text = (overrideText ?? input).trim();
     if (!text || !sessionId || busy) return;
+
+    const isFirstMessage = messages.length === 0;
 
     setError(null);
     setInput("");
@@ -190,6 +291,9 @@ export default function Home() {
             const finalMs = performance.now() - startedAt;
             updateAssistant((m) => ({ ...m, elapsedMs: finalMs }));
             if (speakReplies) speak(fullAssistantText);
+            // The backend auto-titles a session from its first user
+            // message -- pick that up in the sidebar without a reload.
+            if (isFirstMessage) refreshSessions();
           } else if (evt.type === "error") {
             setError(evt.message);
           }
@@ -304,146 +408,191 @@ export default function Home() {
   const connectionState = error && !sessionId ? "offline" : sessionId ? "online" : "connecting";
 
   return (
-    <div className="app">
-      <div className="header">
-        <div className="header-top">
-          <h1>{ASSISTANT_NAME}</h1>
-          <span className={`status-dot ${connectionState}`} title={connectionState} />
-          <div className="header-actions">
-            <button
-              type="button"
-              className="logout-link"
-              disabled={busy}
-              onClick={async () => {
-                const resp = await fetch(`${API_BASE}/api/chat/sessions`, { method: "POST", credentials: "include" });
-                if (resp.status === 401) {
-                  window.location.href = "/login";
-                  return;
-                }
-                const data = await resp.json();
-                localStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
-                setSessionId(data.session_id);
-                setMessages([]);
-              }}
-            >
-              New chat
-            </button>
-            <button
-              type="button"
-              className="logout-link"
-              onClick={() => {
-                fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).finally(() => {
-                  localStorage.removeItem(SESSION_STORAGE_KEY);
-                  window.location.href = "/login";
-                });
-              }}
-            >
-              Log out
-            </button>
-          </div>
-        </div>
-        <p>Self-hosted, open-weight assistant. Nothing here is sent to Anthropic, OpenAI, or Google.</p>
-        <label className="speak-toggle">
-          <input type="checkbox" checked={speakReplies} onChange={(e) => setSpeakReplies(e.target.checked)} />
-          🔊 Speak replies
-        </label>
-      </div>
+    <div className={`layout ${sidebarOpen ? "sidebar-open" : ""}`}>
+      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
 
-      <div className="messages">
-        {messages.length === 0 && (
-          <div className="empty-state">
-            <div className="empty-state-icon">🤖</div>
-            <p>Ask me anything, or try one of these:</p>
-            <div className="prompt-chips">
-              {EXAMPLE_PROMPTS.map((p) => (
-                <button key={p} className="prompt-chip" onClick={() => sendMessage(p)} disabled={!sessionId}>
-                  {p}
+      <aside className="sidebar">
+        <button type="button" className="new-chat-button" onClick={startNewChat}>
+          <span>+</span> New chat
+        </button>
+
+        <div className="session-list">
+          {sessions.map((s) => (
+            <div key={s.id} className={`session-item ${s.id === sessionId ? "active" : ""}`}>
+              {editingId === s.id ? (
+                <input
+                  ref={renameInputRef}
+                  className="session-rename-input"
+                  value={editingTitle}
+                  onChange={(e) => setEditingTitle(e.target.value)}
+                  onBlur={() => commitRename(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                    if (e.key === "Escape") setEditingId(null);
+                  }}
+                />
+              ) : (
+                <button type="button" className="session-title" onClick={() => loadSession(s.id)}>
+                  {s.title || "New chat"}
                 </button>
-              ))}
-            </div>
-          </div>
-        )}
+              )}
 
-        {messages.map((m, i) => {
-          const isLive = m.role === "assistant" && busy && i === messages.length - 1;
-          const isEmptyLive = isLive && !m.content;
-          return (
-            <div key={i} className={`message-row ${m.role}`}>
-              <div className={`avatar ${m.role}`}>{m.role === "user" ? "🧑" : "🤖"}</div>
-              <div className={`message ${m.role}`}>
-                {isEmptyLive ? (
-                  <div className="typing-indicator">
-                    <span className="dot" />
-                    <span className="dot" />
-                    <span className="dot" />
-                    <span className="thinking-label">Thinking… {formatDuration(elapsedMs)}</span>
-                  </div>
-                ) : (
-                  <>
-                    {m.content}
-                    {isLive && <span className="live-timer">{formatDuration(elapsedMs)}</span>}
-                  </>
-                )}
-                {(m.citations?.length || m.toolEvents?.length || m.elapsedMs) && (
-                  <div className="meta-row">
-                    {m.citations?.map((c) => (
-                      <span key={c.document_id} className="badge" title={`similarity ${c.score}`}>
-                        📄 {c.title}
-                      </span>
-                    ))}
-                    {m.toolEvents
-                      ?.filter((t) => t.phase === "call")
-                      .map((t, idx) => (
-                        <span key={idx} className="badge tool">
-                          🔧 {t.name}
-                        </span>
-                      ))}
-                    {m.elapsedMs != null && (
-                      <span className="badge time" title="response time">
-                        ⏱ {formatDuration(m.elapsedMs)}
-                      </span>
-                    )}
+              <div className="session-menu">
+                <button
+                  type="button"
+                  className="menu-trigger"
+                  onClick={() => setMenuOpenId(menuOpenId === s.id ? null : s.id)}
+                  title="Chat options"
+                >
+                  ⋮
+                </button>
+                {menuOpenId === s.id && (
+                  <div className="menu-dropdown">
+                    <button type="button" onClick={() => startRename(s)}>
+                      ✏️ Rename
+                    </button>
+                    <button type="button" className="danger" onClick={() => deleteSession(s.id)}>
+                      🗑 Delete
+                    </button>
                   </div>
                 )}
               </div>
             </div>
-          );
-        })}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {error && <div className="error-banner">{error}</div>}
-
-      {recording && (
-        <div className="recording-bar">
-          <div className="level-meter">
-            {[0, 1, 2, 3, 4].map((i) => (
-              <div key={i} className="level-bar" ref={(el) => { barRefs.current[i] = el; }} />
-            ))}
-          </div>
-          <span>Recording… {recordingSeconds}s (tap 🎤 to stop)</span>
+          ))}
         </div>
-      )}
+      </aside>
 
-      <div className="composer">
-        <button
-          onClick={toggleRecording}
-          disabled={!sessionId || busy || transcribing}
-          className={`mic-button ${recording ? "recording" : ""} ${transcribing ? "transcribing" : ""}`}
-          title={recording ? "Stop recording" : "Record a voice message"}
-        >
-          {transcribing ? <span className="spinner" /> : recording ? "⏹" : "🎤"}
-        </button>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-          placeholder={transcribing ? "Transcribing…" : sessionId ? "Ask anything…" : "Connecting…"}
-          disabled={!sessionId || busy || recording || transcribing}
-        />
-        <button className="send-button" onClick={() => sendMessage()} disabled={!sessionId || busy || !input.trim()}>
-          Send
-        </button>
+      <div className="app">
+        <div className="header">
+          <div className="header-top">
+            <button
+              type="button"
+              className="sidebar-toggle"
+              onClick={() => setSidebarOpen((v) => !v)}
+              title="Chat history"
+            >
+              ☰
+            </button>
+            <h1>{ASSISTANT_NAME}</h1>
+            <span className={`status-dot ${connectionState}`} title={connectionState} />
+            <div className="header-actions">
+              <button
+                type="button"
+                className="logout-link"
+                onClick={() => {
+                  fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).finally(() => {
+                    localStorage.removeItem(SESSION_STORAGE_KEY);
+                    window.location.href = "/login";
+                  });
+                }}
+              >
+                Log out
+              </button>
+            </div>
+          </div>
+          <p>Self-hosted, open-weight assistant. Nothing here is sent to Anthropic, OpenAI, or Google.</p>
+          <label className="speak-toggle">
+            <input type="checkbox" checked={speakReplies} onChange={(e) => setSpeakReplies(e.target.checked)} />
+            🔊 Speak replies
+          </label>
+        </div>
+
+        <div className="messages">
+          {messages.length === 0 && (
+            <div className="empty-state">
+              <div className="empty-state-icon">🤖</div>
+              <p>Ask me anything, or try one of these:</p>
+              <div className="prompt-chips">
+                {EXAMPLE_PROMPTS.map((p) => (
+                  <button key={p} className="prompt-chip" onClick={() => sendMessage(p)} disabled={!sessionId}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((m, i) => {
+            const isLive = m.role === "assistant" && busy && i === messages.length - 1;
+            const isEmptyLive = isLive && !m.content;
+            return (
+              <div key={i} className={`message-row ${m.role}`}>
+                <div className={`avatar ${m.role}`}>{m.role === "user" ? "🧑" : "🤖"}</div>
+                <div className={`message ${m.role}`}>
+                  {isEmptyLive ? (
+                    <div className="typing-indicator">
+                      <span className="dot" />
+                      <span className="dot" />
+                      <span className="dot" />
+                      <span className="thinking-label">Thinking… {formatDuration(elapsedMs)}</span>
+                    </div>
+                  ) : (
+                    <>
+                      {m.content}
+                      {isLive && <span className="live-timer">{formatDuration(elapsedMs)}</span>}
+                    </>
+                  )}
+                  {(m.citations?.length || m.toolEvents?.length || m.elapsedMs) && (
+                    <div className="meta-row">
+                      {m.citations?.map((c) => (
+                        <span key={c.document_id} className="badge" title={`similarity ${c.score}`}>
+                          📄 {c.title}
+                        </span>
+                      ))}
+                      {m.toolEvents
+                        ?.filter((t) => t.phase === "call")
+                        .map((t, idx) => (
+                          <span key={idx} className="badge tool">
+                            🔧 {t.name}
+                          </span>
+                        ))}
+                      {m.elapsedMs != null && (
+                        <span className="badge time" title="response time">
+                          ⏱ {formatDuration(m.elapsedMs)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {error && <div className="error-banner">{error}</div>}
+
+        {recording && (
+          <div className="recording-bar">
+            <div className="level-meter">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <div key={i} className="level-bar" ref={(el) => { barRefs.current[i] = el; }} />
+              ))}
+            </div>
+            <span>Recording… {recordingSeconds}s (tap 🎤 to stop)</span>
+          </div>
+        )}
+
+        <div className="composer">
+          <button
+            onClick={toggleRecording}
+            disabled={!sessionId || busy || transcribing}
+            className={`mic-button ${recording ? "recording" : ""} ${transcribing ? "transcribing" : ""}`}
+            title={recording ? "Stop recording" : "Record a voice message"}
+          >
+            {transcribing ? <span className="spinner" /> : recording ? "⏹" : "🎤"}
+          </button>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+            placeholder={transcribing ? "Transcribing…" : sessionId ? "Ask anything…" : "Connecting…"}
+            disabled={!sessionId || busy || recording || transcribing}
+          />
+          <button className="send-button" onClick={() => sendMessage()} disabled={!sessionId || busy || !input.trim()}>
+            Send
+          </button>
+        </div>
       </div>
     </div>
   );

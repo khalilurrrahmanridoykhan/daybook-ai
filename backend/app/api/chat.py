@@ -5,7 +5,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.schemas.chat import ChatRequest, SessionSummary
+from app.schemas.chat import ChatRequest, RenameSessionRequest, SessionSummary
 from app.services import memory
 from app.services.chat_orchestrator import stream_chat_turn
 
@@ -25,6 +25,25 @@ def list_sessions() -> list[SessionSummary]:
 @router.get("/chat/sessions/{session_id}/messages")
 def get_messages(session_id: str) -> list[dict]:
     return memory.get_history(session_id)
+
+
+@router.delete("/chat/sessions/{session_id}")
+def delete_session(session_id: str) -> dict[str, bool]:
+    if not memory.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"No session with id {session_id}")
+    memory.delete_session(session_id)
+    return {"ok": True}
+
+
+@router.patch("/chat/sessions/{session_id}")
+def rename_session(session_id: str, req: RenameSessionRequest) -> dict[str, bool]:
+    if not memory.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"No session with id {session_id}")
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    memory.rename_session(session_id, title)
+    return {"ok": True}
 
 
 @router.post("/chat/sessions/{session_id}/messages/stream")
