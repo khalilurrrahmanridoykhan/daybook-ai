@@ -217,6 +217,14 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
     if citations:
         yield {"type": "citations", "citations": citations}
 
+    # Small talk never needs a tool call -- omitting the schema list from
+    # the request avoids evaluating it as prompt context at all, not just
+    # skipping RAG. Measured live: 14 tools' worth of JSON-Schema is
+    # ~5,000 characters, sent (and evaluated) on every single request
+    # regardless of whether RAG's own smalltalk skip already fired -- this
+    # was still true, and still the dominant cost, even with RAG skipped.
+    tools_for_this_turn = None if _is_smalltalk(user_message) else TOOL_SCHEMAS
+
     final_text_parts: list[str] = []
 
     for _round in range(MAX_TOOL_ROUNDS):
@@ -230,7 +238,7 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
         # answer. Anything else streams live as it arrives, same as before.
         suppress_streaming = False
 
-        for chunk in ollama_client.chat_stream(messages, tools=TOOL_SCHEMAS):
+        for chunk in ollama_client.chat_stream(messages, tools=tools_for_this_turn):
             message = chunk.get("message", {})
             delta = message.get("content", "")
             if delta:

@@ -169,6 +169,18 @@ def _fake_chat_stream(rounds):
     return fake
 
 
+def _capturing_chat_stream(rounds, captured_tools):
+    """Same as _fake_chat_stream but also records the `tools` argument
+    each call received, so a test can assert on it."""
+    calls = iter(rounds)
+
+    def fake(messages, tools=None, model=None):
+        captured_tools.append(tools)
+        return iter(next(calls))
+
+    return fake
+
+
 def test_stream_chat_turn_answers_directly_when_no_tool_call(monkeypatch, tmp_path):
     _empty_knowledge_store(monkeypatch)
     monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
@@ -185,6 +197,45 @@ def test_stream_chat_turn_answers_directly_when_no_tool_call(monkeypatch, tmp_pa
     assert deltas == "Hello there."
     assert events[-1]["type"] == "done"
     assert [e["type"] for e in events if e["type"] == "tool_call"] == []
+
+
+def test_stream_chat_turn_omits_tool_schemas_for_smalltalk(monkeypatch, tmp_path):
+    """Option 1 of the latency fix: a greeting never needs a tool call, so
+    the ~5,000-character TOOL_SCHEMAS payload must not even be sent to
+    Ollama -- not just have RAG retrieval skipped alongside it. Live-
+    measured: this was still the dominant cost of a 1m42s "hi" reply even
+    after RAG's own smalltalk skip was already in place."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    captured_tools: list = []
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _capturing_chat_stream([[{"message": {"content": "Hello there."}, "done": True}]], captured_tools),
+    )
+
+    session_id = memory.create_session()
+    list(chat_orchestrator.stream_chat_turn(session_id, "hi"))
+
+    assert captured_tools == [None]
+
+
+def test_stream_chat_turn_still_sends_tool_schemas_for_real_questions(monkeypatch, tmp_path):
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    captured_tools: list = []
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _capturing_chat_stream(
+            [[{"message": {"content": "You have 3 tasks due today."}, "done": True}]], captured_tools
+        ),
+    )
+
+    session_id = memory.create_session()
+    list(chat_orchestrator.stream_chat_turn(session_id, "what's on my task list today?"))
+
+    assert captured_tools == [tools.TOOL_SCHEMAS]
 
 
 def test_stream_chat_turn_executes_fallback_json_tool_call(monkeypatch, tmp_path):
