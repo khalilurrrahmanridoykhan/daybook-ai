@@ -1,0 +1,26 @@
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+*.pyc
+
+# Runtime data -- never committed, contains real conversation history
+backend/data/*.sqlite3
+backend/data/ridoy_ai.sqlite3
+
+# Secrets
+backend/.env
+frontend/.env.local
+
+# Logs
+backend/logs/
+frontend/logs/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/next-env.d.ts
+
+# OS cruft
+.DS_Store
