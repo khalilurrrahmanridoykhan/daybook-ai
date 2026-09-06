@@ -52,7 +52,7 @@ body {
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
   gap: 8px;
 }
 
@@ -257,7 +257,10 @@ body {
 /* ---------- header ---------- */
 
 .header {
-  padding: 18px 20px 14px;
+  /* Extra top padding is the safe-area inset (the iPhone notch/Dynamic
+     Island) -- only non-zero when installed full-screen (viewport-fit:
+     cover); a plain zero everywhere else, including on Mac. */
+  padding: calc(18px + env(safe-area-inset-top)) 20px 14px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -568,7 +571,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 14px 20px 18px;
+  padding: 14px 20px calc(18px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
 }
 

@@ -23,5 +23,12 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // manifest.webmanifest and the icon files must stay public -- iOS/Mac
+  // fetch them to install the app (Add to Home Screen / Add to Dock),
+  // sometimes from contexts that don't carry the session cookie. None of
+  // them are sensitive (just app name/colors/icon images), so there's no
+  // reason to gate them behind login in the first place.
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|apple-touch-icon.png|icon-192.png|icon-512.png|icon-512-maskable.png|favicon-16.png|favicon-32.png).*)",
+  ],
 };
