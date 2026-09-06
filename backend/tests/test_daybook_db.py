@@ -141,7 +141,7 @@ def test_get_budget_summary_computes_envelope_math_correctly(monkeypatch):
         monkeypatch,
         FakeCursor(
             [
-                {"id": "bm1"},  # BudgetMonth lookup
+                {"id": "bm1", "expectedIncome": 800000},  # BudgetMonth lookup
                 {"total": 500000},  # income sum
                 [  # allocations
                     {"categoryId": "c1", "categoryName": "Groceries", "plannedAmount": 100000, "rolloverIn": 0},
@@ -163,6 +163,7 @@ def test_get_budget_summary_computes_envelope_math_correctly(monkeypatch):
     assert envelope["available"] == 65000
     assert envelope["overspent"] is False
     assert result["summary"]["income"] == 500000
+    assert result["summary"]["expectedIncome"] == 800000  # distinct from income -- see chat_orchestrator's system prompt
     assert result["summary"]["unallocated"] == 500000 - 100000
     assert result["summary"]["leftToSpend"] == 65000
     assert result["summary"]["overspentCount"] == 0
@@ -174,7 +175,7 @@ def test_get_budget_summary_flags_overspent_envelope(monkeypatch):
         monkeypatch,
         FakeCursor(
             [
-                {"id": "bm1"},
+                {"id": "bm1", "expectedIncome": 0},
                 {"total": 0},
                 [{"categoryId": "c1", "categoryName": "Fun", "plannedAmount": 1000, "rolloverIn": 0}],
                 [{"categoryId": "c1", "amount": 5000, "direction": "EXPENSE"}],
@@ -200,7 +201,7 @@ def test_get_budget_summary_income_is_json_serializable_even_as_decimal(monkeypa
         monkeypatch,
         FakeCursor(
             [
-                {"id": "bm1"},
+                {"id": "bm1", "expectedIncome": 0},
                 {"total": Decimal("500000")},
                 [],
                 [],

@@ -262,11 +262,12 @@ def get_budget_summary(month: str | None = None) -> dict:
     month = month or _current_month()
 
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute('SELECT id FROM "BudgetMonth" WHERE "userId" = %s AND month = %s', (user_id, month))
+        cur.execute('SELECT id, "expectedIncome" FROM "BudgetMonth" WHERE "userId" = %s AND month = %s', (user_id, month))
         budget_month = cur.fetchone()
         if not budget_month:
             return {"month": month, "summary": None}
         budget_month_id = budget_month["id"]
+        expected_income = budget_month["expectedIncome"]
 
         # Postgres promotes SUM(bigint) to numeric (to avoid overflow),
         # which psycopg maps to Decimal -- not JSON-serializable, and this
@@ -316,6 +317,12 @@ def get_budget_summary(month: str | None = None) -> dict:
     return {
         "month": month,
         "summary": {
+            # Two genuinely different things: expectedIncome is the
+            # planned/expected figure set via set_expected_income;
+            # income is the sum of actually-recorded IncomeEntry rows.
+            # A plain "what's my budget" question is almost always
+            # asking about expectedIncome.
+            "expectedIncome": expected_income,
             "income": income,
             "planned": planned_total,
             "allocated": sum(e["allocated"] for e in envelopes),

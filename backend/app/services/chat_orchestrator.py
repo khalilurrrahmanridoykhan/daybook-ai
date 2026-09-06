@@ -44,6 +44,12 @@ set_allocation or set_expected_income with that month. If the user says "set my 
 naming a specific category, that almost always means the whole month's expected income \
 (set_expected_income) rather than one category -- ask which they mean only if it's genuinely unclear.
 
+get_budget_summary's result has two genuinely different income figures -- expectedIncome (the planned \
+figure from set_expected_income) and income (the sum of actually-recorded income transactions, a \
+separate feature). A plain "what's my budget for X" question is almost always asking about \
+expectedIncome; check that field before concluding nothing has been budgeted. If summary is null, \
+that genuinely means nothing has been set for that month yet.
+
 Money in Daybook is minor units (e.g. poisha for BDT, cents for USD) -- when the user says an amount \
 in everyday terms ("500 taka", "$12.50"), convert it to minor units yourself (multiply by 100) \
 before calling a tool that takes an amount; when you report a summary back to the user, convert minor \
