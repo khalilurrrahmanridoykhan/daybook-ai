@@ -74,5 +74,10 @@ class Settings(BaseSettings):
     google_token_path: str = "data/google_token.json"
     google_calendar_id: str = "primary"
 
+    # A static bearer token for /api/voice/ask -- separate from the admin
+    # login's cookie session, since a Siri Shortcut can't hold a browser
+    # session. Generate with scripts/create_voice_api_key.py.
+    voice_api_key: str = ""
+
 
 settings = Settings()
