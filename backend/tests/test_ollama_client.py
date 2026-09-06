@@ -79,6 +79,20 @@ def test_chat_stream_raises_ollama_error_on_connect_failure(monkeypatch):
         list(ollama_client.chat_stream([{"role": "user", "content": "hi"}]))
 
 
+def test_chat_stream_raises_ollama_error_on_timeout(monkeypatch):
+    """Live bug: httpx.TimeoutException wasn't caught at all, so a slow
+    (not broken) model produced a bare 'timed out' string all the way up
+    to the SSE error event instead of a clear OllamaError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    _patched_client(monkeypatch, handler)
+
+    with pytest.raises(ollama_client.OllamaError, match="did not finish"):
+        list(ollama_client.chat_stream([{"role": "user", "content": "hi"}]))
+
+
 def test_embed_returns_embeddings_list(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/embed"
@@ -97,4 +111,14 @@ def test_embed_raises_on_non_200(monkeypatch):
     _patched_client(monkeypatch, handler)
 
     with pytest.raises(ollama_client.OllamaError, match="404"):
+        ollama_client.embed(["a"])
+
+
+def test_embed_raises_ollama_error_on_timeout(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+    _patched_client(monkeypatch, handler)
+
+    with pytest.raises(ollama_client.OllamaError, match="did not finish"):
         ollama_client.embed(["a"])

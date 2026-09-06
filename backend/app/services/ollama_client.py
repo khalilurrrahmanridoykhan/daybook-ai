@@ -28,7 +28,15 @@ class OllamaError(RuntimeError):
     answer."""
 
 
-def _client(timeout: float = 120.0) -> httpx.Client:
+# Matches nginx's own proxy_read_timeout for this project's public domain
+# (see README) -- a shorter client-side timeout than the proxy's would
+# silently cut off a request the proxy was still willing to wait for.
+# Live-observed on this CPU-only hardware: a single tool-use round can
+# exceed 120s under load, well within normal for this project, not a hang.
+_DEFAULT_TIMEOUT = 300.0
+
+
+def _client(timeout: float = _DEFAULT_TIMEOUT) -> httpx.Client:
     return httpx.Client(base_url=settings.ollama_base_url, timeout=timeout)
 
 
@@ -59,6 +67,15 @@ def chat_stream(
                     raise OllamaError(f"Malformed line from Ollama: {line!r}") from e
     except httpx.ConnectError as e:
         raise OllamaError(f"Could not reach Ollama at {settings.ollama_base_url} -- is it running? ({e})") from e
+    except httpx.TimeoutException as e:
+        # Live-observed as a bare, unhelpful "timed out" propagating all
+        # the way to the SSE error event when this wasn't caught -- wrap
+        # it so a slow-but-working model reads clearly as "still running,
+        # just past the timeout," not an opaque failure.
+        raise OllamaError(
+            f"Ollama did not finish this request within {_DEFAULT_TIMEOUT:.0f}s -- "
+            "the model may be under heavy load, or this prompt is unusually large."
+        ) from e
 
 
 def embed(texts: list[str], model: str | None = None) -> list[list[float]]:
@@ -68,6 +85,8 @@ def embed(texts: list[str], model: str | None = None) -> list[list[float]]:
             resp = client.post("/api/embed", json=payload)
     except httpx.ConnectError as e:
         raise OllamaError(f"Could not reach Ollama at {settings.ollama_base_url} -- is it running? ({e})") from e
+    except httpx.TimeoutException as e:
+        raise OllamaError("Ollama did not finish embedding within 60s.") from e
     if resp.status_code != 200:
         raise OllamaError(f"Ollama /api/embed returned {resp.status_code}: {resp.text}")
     return resp.json()["embeddings"]
