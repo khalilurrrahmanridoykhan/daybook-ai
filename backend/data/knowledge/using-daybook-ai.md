@@ -1,0 +1,5 @@
+DayBook AI can create, list, complete, and reschedule tasks; create and search notes; and check the budget, list wallets, and log transactions -- all through natural language, acting directly on the same Daybook account the user logs into the main app with.
+
+Example phrasings and what they map to: "add a task to call the plumber tomorrow" creates a task with a due date resolved from the current date. "what's on my list today" or "show me what's due" lists tasks filtered by a due-before date. "mark the plumber task done" completes a task. "note down that the wifi password is..." creates a note. "how much do I have left for groceries this month" checks the budget summary for the Groceries category. "I spent 500 on lunch" logs a transaction against a category named or resolved from context, converting the everyday amount into the minor units Daybook stores money as.
+
+DayBook AI only acts on the one Daybook account it's configured for -- it has no way to see or affect any other account, even if one existed.

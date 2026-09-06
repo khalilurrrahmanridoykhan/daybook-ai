@@ -6,13 +6,13 @@ plain JSON text instead of Ollama's structured tool_calls field.
 
 from app.rag.embeddings import LocalHashingEmbedder
 from app.rag.store import Document, InMemoryVectorStore, ScoredDocument
-from app.services import chat_orchestrator, memory
+from app.services import chat_orchestrator, memory, tools
 from app.services.chat_orchestrator import _build_system_prompt, _is_smalltalk, _parse_fallback_tool_call
 
 
 def test_parse_fallback_tool_call_recognizes_valid_shape():
-    call = _parse_fallback_tool_call('{"name": "calculate", "arguments": {"expression": "2+2"}}')
-    assert call == {"function": {"name": "calculate", "arguments": {"expression": "2+2"}}}
+    call = _parse_fallback_tool_call('{"name": "create_task", "arguments": {"title": "Buy milk"}}')
+    assert call == {"function": {"name": "create_task", "arguments": {"title": "Buy milk"}}}
 
 
 def test_parse_fallback_tool_call_rejects_unknown_tool_name():
@@ -24,12 +24,12 @@ def test_parse_fallback_tool_call_rejects_non_json():
 
 
 def test_parse_fallback_tool_call_rejects_json_missing_arguments():
-    assert _parse_fallback_tool_call('{"name": "calculate"}') is None
+    assert _parse_fallback_tool_call('{"name": "current_datetime"}') is None
 
 
 def test_parse_fallback_tool_call_rejects_trailing_prose():
     # Must be the *whole* trimmed content, not JSON embedded in a longer answer.
-    assert _parse_fallback_tool_call('{"name": "calculate", "arguments": {}} and that is the answer') is None
+    assert _parse_fallback_tool_call('{"name": "current_datetime", "arguments": {}} and that is the answer') is None
 
 
 def test_is_smalltalk_matches_common_greetings_case_and_punctuation_insensitive():
@@ -38,7 +38,7 @@ def test_is_smalltalk_matches_common_greetings_case_and_punctuation_insensitive(
 
 
 def test_is_smalltalk_does_not_match_real_questions():
-    for message in ["hi, what is Bangladesh EWARS?", "What is 384 times 27?", "tell me about Ridoy's projects"]:
+    for message in ["hi, what's due today?", "add a task to call the plumber", "how much is left for groceries"]:
         assert _is_smalltalk(message) is False
 
 
@@ -138,26 +138,70 @@ def test_stream_chat_turn_executes_fallback_json_tool_call(monkeypatch, tmp_path
             [
                 # Round 1: model emits the tool call as plain JSON text (the
                 # exact qwen2.5-coder:7b behavior observed live).
-                [{"message": {"content": '{"name": "calculate", "arguments": {"expression": "384 * 27"}}'}, "done": True}],
+                [{"message": {"content": '{"name": "current_datetime", "arguments": {}}'}, "done": True}],
                 # Round 2: model uses the tool result to answer for real.
-                [{"message": {"content": "384 times 27 is 10368."}, "done": True}],
+                [{"message": {"content": "It's currently 2026-09-06."}, "done": True}],
             ]
         ),
     )
 
     session_id = memory.create_session()
-    events = list(chat_orchestrator.stream_chat_turn(session_id, "What is 384 times 27?"))
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "what's today's date?"))
 
     # The raw JSON blob from round 1 must never appear as a delta.
     deltas = "".join(e["content"] for e in events if e["type"] == "delta")
-    assert deltas == "384 times 27 is 10368."
+    assert deltas == "It's currently 2026-09-06."
     assert '{"name"' not in deltas
 
     tool_calls = [e for e in events if e["type"] == "tool_call"]
-    assert tool_calls == [{"type": "tool_call", "name": "calculate", "arguments": {"expression": "384 * 27"}}]
+    assert tool_calls == [{"type": "tool_call", "name": "current_datetime", "arguments": {}}]
 
     tool_results = [e for e in events if e["type"] == "tool_result"]
-    assert tool_results[0]["result"]["result"] == 10368
+    assert tool_results[0]["result"]["utc"] is True
+
+
+def test_stream_chat_turn_executes_a_real_daybook_tool_via_structured_tool_calls(monkeypatch, tmp_path):
+    """End-to-end through the full orchestrator loop, using Ollama's
+    well-behaved structured tool_calls field (not the fallback parser)
+    and a real Daybook tool -- create_task -- with daybook_client mocked
+    at the HTTP boundary it would otherwise cross."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(
+        tools.daybook_client,
+        "create_task",
+        lambda **kw: {"id": "t1", "title": kw["title"], "status": "TODO"},
+    )
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [{"function": {"name": "create_task", "arguments": {"title": "Call the plumber"}}}],
+                        },
+                        "done": True,
+                    }
+                ],
+                [{"message": {"content": "Added 'Call the plumber' to your tasks."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "add a task to call the plumber"))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert deltas == "Added 'Call the plumber' to your tasks."
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert tool_calls == [{"type": "tool_call", "name": "create_task", "arguments": {"title": "Call the plumber"}}]
+
+    tool_results = [e for e in events if e["type"] == "tool_result"]
+    assert tool_results[0]["result"] == {"id": "t1", "title": "Call the plumber", "status": "TODO"}
 
 
 def test_stream_chat_turn_flushes_brace_prefixed_answer_that_is_not_a_tool_call(monkeypatch, tmp_path):
