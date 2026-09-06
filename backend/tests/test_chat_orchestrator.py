@@ -408,6 +408,70 @@ def test_stream_chat_turn_executes_a_real_daybook_tool_via_structured_tool_calls
     assert tool_results[0]["result"] == {"id": "t1", "title": "Call the plumber", "status": "TODO"}
 
 
+def test_stream_chat_turn_executes_a_calendar_reminder_via_structured_tool_calls(monkeypatch, tmp_path):
+    """End-to-end through the full orchestrator loop for a 'remind me'
+    request -- google_calendar mocked at the API boundary it would
+    otherwise cross, same pattern as the Daybook create_task test above."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(
+        tools.google_calendar,
+        "create_event",
+        lambda **kw: {"id": "e1", "summary": kw["summary"], "start": kw["start"], "end": kw["start"]},
+    )
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "function": {
+                                        "name": "create_calendar_event",
+                                        "arguments": {
+                                            "summary": "Take medicine",
+                                            "start": "2026-10-05T20:00:00+06:00",
+                                            "reminder_minutes_before": 10,
+                                        },
+                                    }
+                                }
+                            ],
+                        },
+                        "done": True,
+                    }
+                ],
+                [{"message": {"content": "Reminder set for 8pm on October 5th."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "remind me to take medicine at 8pm on october 5th"))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert deltas == "Reminder set for 8pm on October 5th."
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert tool_calls == [
+        {
+            "type": "tool_call",
+            "name": "create_calendar_event",
+            "arguments": {
+                "summary": "Take medicine",
+                "start": "2026-10-05T20:00:00+06:00",
+                "reminder_minutes_before": 10,
+            },
+        }
+    ]
+
+    tool_results = [e for e in events if e["type"] == "tool_result"]
+    assert tool_results[0]["result"]["id"] == "e1"
+
+
 def test_stream_chat_turn_flushes_brace_prefixed_answer_that_is_not_a_tool_call(monkeypatch, tmp_path):
     _empty_knowledge_store(monkeypatch)
     monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))

@@ -6,6 +6,7 @@ import pytest
 
 from app.services import tools
 from app.services.daybook_db import DaybookDbError
+from app.services.google_calendar import GoogleCalendarError
 from app.services.tools import ToolError, call_tool, current_datetime
 
 
@@ -13,6 +14,19 @@ def test_current_datetime_is_utc_iso():
     result = current_datetime()
     assert result["utc"] is True
     assert "T" in result["iso"]
+
+
+def test_current_datetime_also_returns_local_time_for_calendar_use(monkeypatch):
+    """Live-relevant bug this guards against: if the model only ever sees
+    UTC and computes a calendar event's local time by hand, Asia/Dhaka
+    (UTC+6) is exactly the kind of offset that goes silently wrong."""
+    monkeypatch.setattr(tools.settings, "local_timezone", "Asia/Dhaka")
+    result = current_datetime()
+    assert result["local_timezone"] == "Asia/Dhaka"
+    assert "T" in result["local_iso"]
+    # UTC and local must actually be different clock times, not the same
+    # value under two keys.
+    assert result["local_iso"][:19] != result["iso"][:19]
 
 
 def test_list_tasks_wraps_client_result(monkeypatch):
@@ -64,6 +78,35 @@ def test_a_daybook_db_error_becomes_a_tool_error(monkeypatch):
     monkeypatch.setattr(tools.daybook_db, "list_tasks", boom)
     with pytest.raises(ToolError, match="Could not reach"):
         tools.list_tasks()
+
+
+def test_list_calendar_events_wraps_client_result(monkeypatch):
+    monkeypatch.setattr(tools.google_calendar, "list_events", lambda **kw: [{"id": "e1", "summary": "Dentist"}])
+    result = tools.list_calendar_events(time_min="2026-10-01T00:00:00+06:00")
+    assert result == {"events": [{"id": "e1", "summary": "Dentist"}]}
+
+
+def test_create_calendar_event_passes_through_client_dict(monkeypatch):
+    monkeypatch.setattr(
+        tools.google_calendar, "create_event", lambda **kw: {"id": "e2", "summary": kw["summary"]}
+    )
+    result = tools.create_calendar_event(summary="Take medicine", start="2026-10-05T20:00:00+06:00")
+    assert result == {"id": "e2", "summary": "Take medicine"}
+
+
+def test_delete_calendar_event_passes_through_client_dict(monkeypatch):
+    monkeypatch.setattr(tools.google_calendar, "delete_event", lambda **kw: {"deleted": kw["event_id"]})
+    result = tools.delete_calendar_event(event_id="e1")
+    assert result == {"deleted": "e1"}
+
+
+def test_a_google_calendar_error_becomes_a_tool_error(monkeypatch):
+    def boom(**kw):
+        raise GoogleCalendarError("No Google Calendar token found")
+
+    monkeypatch.setattr(tools.google_calendar, "list_events", boom)
+    with pytest.raises(ToolError, match="No Google Calendar token found"):
+        tools.list_calendar_events()
 
 
 def test_call_tool_dispatches_by_name(monkeypatch):

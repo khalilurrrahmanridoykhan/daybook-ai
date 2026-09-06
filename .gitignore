@@ -9,6 +9,9 @@ backend/.pytest_cache/
 backend/data/*.sqlite3
 backend/data/ridoy_ai.sqlite3
 
+# Google Calendar OAuth token -- a live credential, not just a secret
+backend/data/google_token.json
+
 # Secrets
 backend/.env
 frontend/.env.local

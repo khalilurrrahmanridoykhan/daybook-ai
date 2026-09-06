@@ -14,6 +14,7 @@ Claude, GPT, and Gemini are products of companies with billions of dollars in tr
   - **Memory** -- SQLite-backed conversation sessions, persisted across restarts (`app/services/memory.py`).
   - **RAG** -- a small in-memory vector store built from markdown files in `data/knowledge/` (envelope-budgeting concepts, example phrasings), embedded via Ollama's real `nomic-embed-text` model by default, with a dependency-free local hashing embedder as an offline-testable fallback.
   - **Tool-use** -- an explicit registry (`app/services/tools.py`) of Daybook capabilities: list/create/complete/reschedule/delete tasks, create/search/pin notes, budget summary, wallets, and logging transactions -- each a thin wrapper around `app/services/daybook_client.py`, which talks to Daybook's own `/api/ai/*` bridge routes over HTTPS. **The business logic lives in Daybook's Next.js app, never reimplemented here** -- this backend only ever calls Daybook's API, never touches its database directly.
+  - **Google Calendar** (`app/services/google_calendar.py`) -- reminders and events on the user's real Google Calendar (list/create/delete), authorized once via a local OAuth script (`scripts/setup_google_calendar.py`), not an in-app login flow. See "Connecting Google Calendar" below.
   - **The Ollama client** (`app/services/ollama_client.py`) -- the one place that knows Ollama's request/response shape.
   - **Speech-to-text** (`app/services/speech_to_text.py`) -- self-hosted via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2, CPU int8, no PyTorch, no cloud speech API).
   - **Auth** (`app/services/auth.py`, `app/api/auth.py`) -- a signed httpOnly-cookie session, checked against one bcrypt-hashed username/password. No registration, no user table. Independent of Daybook's own Auth.js session on purpose: cross-origin cookie sharing between a Vercel origin and this VPS origin isn't worth the complexity for one personal user. Guards the chat and speech routers; `/api/auth/*` and `/api/health` stay open.
@@ -62,6 +63,17 @@ Prints a generated password once, plus the `ADMIN_USERNAME`/`ADMIN_PASSWORD_HASH
 
 `DAYBOOK_AI_SECRET` must match `AI_BACKEND_SECRET` in Daybook's own `.env` (same value, different variable name because it's a different codebase).
 
+## Connecting Google Calendar
+
+Reminders and events go through the real Google Calendar API, not a Daybook feature. One-time setup, on a machine with a browser (not the headless VPS):
+
+1. In [console.cloud.google.com](https://console.cloud.google.com), create/select a project, enable the **Google Calendar API**, then under OAuth consent screen add your own Google account as a **test user** (staying in "Testing" mode is normal and expected for a single personal account -- no Google review needed).
+2. Create an OAuth client ID, application type **Desktop app**, and put its Client ID/Secret into `backend/.env` as `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`.
+3. `cd backend && .venv/bin/python scripts/setup_google_calendar.py` -- opens a Google consent screen in your browser, then writes a refresh token to `GOOGLE_TOKEN_PATH` (default `data/google_token.json`).
+4. Copy that one token file to the same path on the VPS and restart the backend there.
+
+The token file is a live credential (already covered by `.gitignore`) -- never commit it. `LOCAL_TIMEZONE` (default `Asia/Dhaka`) is the one setting both `current_datetime` and new calendar events use, so the two can't silently drift apart.
+
 ## Adding to its knowledge
 
 Drop a `.md` or `.txt` file into `backend/data/knowledge/` and restart the backend -- paragraphs are chunked (max ~800 chars, never split mid-paragraph) and embedded automatically.
@@ -73,7 +85,7 @@ cd backend
 USE_LOCAL_EMBEDDER=true pytest tests/ -v
 ```
 
-67 tests, all offline (mocked HTTP transport for both the Ollama client and the Daybook bridge client, a local hashing embedder for RAG, an in-memory SQLite DB for memory) -- no live Ollama daemon and no live Daybook deployment required to run the suite.
+112 tests, all offline (mocked HTTP transport for the Ollama client and the Daybook bridge client, a fake Google Calendar service object, a local hashing embedder for RAG, an in-memory SQLite DB for memory) -- no live Ollama daemon, Daybook deployment, or Google account required to run the suite.
 
 ## Deployment notes (this project's own VPS deployment)
 

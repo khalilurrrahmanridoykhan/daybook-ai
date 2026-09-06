@@ -61,5 +61,18 @@ class Settings(BaseSettings):
     session_secret: str = ""
     session_max_age_hours: int = 24 * 30
 
+    # Shared by current_datetime (tools.py) and google_calendar.py -- one
+    # setting, not two, so "what time is it" and "what timezone does a new
+    # calendar event get created in" can never silently drift apart.
+    local_timezone: str = "Asia/Dhaka"
+
+    # Google Calendar -- OAuth via a one-time local script
+    # (scripts/setup_google_calendar.py), not an in-app login flow. See
+    # that script's docstring for the Google Cloud Console setup steps.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_token_path: str = "data/google_token.json"
+    google_calendar_id: str = "primary"
+
 
 settings = Settings()
