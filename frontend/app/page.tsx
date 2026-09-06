@@ -1,6 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  Bot,
+  Clock,
+  FileText,
+  Loader2,
+  Menu,
+  Mic,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Square,
+  Trash2,
+  User,
+  Volume2,
+  Wrench,
+} from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8300";
 const ASSISTANT_NAME = process.env.NEXT_PUBLIC_ASSISTANT_NAME ?? "DayBook AI";
@@ -119,9 +135,6 @@ export default function Home() {
 
   async function deleteSession(id: string) {
     setMenuOpenId(null);
-    const target = sessions.find((s) => s.id === id);
-    const label = target?.title || "this chat";
-    if (!window.confirm(`Delete "${label}"? This can't be undone.`)) return;
 
     const resp = await fetch(`${API_BASE}/api/chat/sessions/${id}`, { method: "DELETE", credentials: "include" });
     if (resp.status === 401) {
@@ -413,7 +426,7 @@ export default function Home() {
 
       <aside className="sidebar">
         <button type="button" className="new-chat-button" onClick={startNewChat}>
-          <span>+</span> New chat
+          <Plus size={16} /> New chat
         </button>
 
         <div className="session-list">
@@ -444,15 +457,15 @@ export default function Home() {
                   onClick={() => setMenuOpenId(menuOpenId === s.id ? null : s.id)}
                   title="Chat options"
                 >
-                  ⋮
+                  <MoreVertical size={16} />
                 </button>
                 {menuOpenId === s.id && (
                   <div className="menu-dropdown">
                     <button type="button" onClick={() => startRename(s)}>
-                      ✏️ Rename
+                      <Pencil size={14} /> Rename
                     </button>
                     <button type="button" className="danger" onClick={() => deleteSession(s.id)}>
-                      🗑 Delete
+                      <Trash2 size={14} /> Delete
                     </button>
                   </div>
                 )}
@@ -471,7 +484,7 @@ export default function Home() {
               onClick={() => setSidebarOpen((v) => !v)}
               title="Chat history"
             >
-              ☰
+              <Menu size={20} />
             </button>
             <h1>{ASSISTANT_NAME}</h1>
             <span className={`status-dot ${connectionState}`} title={connectionState} />
@@ -490,17 +503,19 @@ export default function Home() {
               </button>
             </div>
           </div>
-          <p>Self-hosted, open-weight assistant. Nothing here is sent to Anthropic, OpenAI, or Google.</p>
+          <p>This is Ridoy Khan&rsquo;s Personal AI Assistant.</p>
           <label className="speak-toggle">
             <input type="checkbox" checked={speakReplies} onChange={(e) => setSpeakReplies(e.target.checked)} />
-            🔊 Speak replies
+            <Volume2 size={14} /> Speak replies
           </label>
         </div>
 
         <div className="messages">
           {messages.length === 0 && (
             <div className="empty-state">
-              <div className="empty-state-icon">🤖</div>
+              <div className="empty-state-icon">
+                <Bot size={44} />
+              </div>
               <p>Ask me anything, or try one of these:</p>
               <div className="prompt-chips">
                 {EXAMPLE_PROMPTS.map((p) => (
@@ -517,7 +532,7 @@ export default function Home() {
             const isEmptyLive = isLive && !m.content;
             return (
               <div key={i} className={`message-row ${m.role}`}>
-                <div className={`avatar ${m.role}`}>{m.role === "user" ? "🧑" : "🤖"}</div>
+                <div className={`avatar ${m.role}`}>{m.role === "user" ? <User size={14} /> : <Bot size={14} />}</div>
                 <div className={`message ${m.role}`}>
                   {isEmptyLive ? (
                     <div className="typing-indicator">
@@ -536,19 +551,19 @@ export default function Home() {
                     <div className="meta-row">
                       {m.citations?.map((c) => (
                         <span key={c.document_id} className="badge" title={`similarity ${c.score}`}>
-                          📄 {c.title}
+                          <FileText size={12} /> {c.title}
                         </span>
                       ))}
                       {m.toolEvents
                         ?.filter((t) => t.phase === "call")
                         .map((t, idx) => (
                           <span key={idx} className="badge tool">
-                            🔧 {t.name}
+                            <Wrench size={12} /> {t.name}
                           </span>
                         ))}
                       {m.elapsedMs != null && (
                         <span className="badge time" title="response time">
-                          ⏱ {formatDuration(m.elapsedMs)}
+                          <Clock size={12} /> {formatDuration(m.elapsedMs)}
                         </span>
                       )}
                     </div>
@@ -569,7 +584,9 @@ export default function Home() {
                 <div key={i} className="level-bar" ref={(el) => { barRefs.current[i] = el; }} />
               ))}
             </div>
-            <span>Recording… {recordingSeconds}s (tap 🎤 to stop)</span>
+            <span>
+              Recording… {recordingSeconds}s (tap <Mic size={13} /> to stop)
+            </span>
           </div>
         )}
 
@@ -580,7 +597,7 @@ export default function Home() {
             className={`mic-button ${recording ? "recording" : ""} ${transcribing ? "transcribing" : ""}`}
             title={recording ? "Stop recording" : "Record a voice message"}
           >
-            {transcribing ? <span className="spinner" /> : recording ? "⏹" : "🎤"}
+            {transcribing ? <Loader2 size={18} className="spin-icon" /> : recording ? <Square size={16} /> : <Mic size={18} />}
           </button>
           <input
             value={input}
