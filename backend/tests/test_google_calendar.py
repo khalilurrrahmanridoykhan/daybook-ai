@@ -4,6 +4,8 @@ Google API call or OAuth token required, same "replace the seam, not the
 logic" pattern as test_daybook_db.py and test_ollama_client.py.
 """
 
+from datetime import datetime, timezone
+
 import httplib2
 import pytest
 from googleapiclient.errors import HttpError
@@ -93,6 +95,33 @@ def test_list_events_summarizes_timed_and_all_day_events(monkeypatch):
     ]
     assert events.calls["list"]["timeMin"] == "2026-10-01T00:00:00+06:00"
     assert events.calls["list"]["singleEvents"] is True
+
+
+def test_list_events_defaults_time_min_to_now_when_not_given(monkeypatch):
+    """Live-caught bug: Google's API does not default timeMin to 'now'
+    when omitted -- it returns events from the start of the calendar's
+    entire history instead (observed live: 2025 events came back ahead of
+    2026 ones on 2026-09-07). 'list my events' must mean upcoming, not
+    ever-recorded."""
+    events = _FakeEventsResource(list_result={"items": []})
+    _patch_service(monkeypatch, events)
+
+    before = datetime.now(timezone.utc)
+    google_calendar.list_events()
+    after = datetime.now(timezone.utc)
+
+    time_min = events.calls["list"]["timeMin"]
+    assert time_min is not None
+    assert before <= datetime.fromisoformat(time_min) <= after
+
+
+def test_list_events_leaves_an_explicit_time_min_untouched(monkeypatch):
+    events = _FakeEventsResource(list_result={"items": []})
+    _patch_service(monkeypatch, events)
+
+    google_calendar.list_events(time_min="2026-10-01T00:00:00+06:00")
+
+    assert events.calls["list"]["timeMin"] == "2026-10-01T00:00:00+06:00"
 
 
 def test_list_events_raises_google_calendar_error_on_http_error(monkeypatch):

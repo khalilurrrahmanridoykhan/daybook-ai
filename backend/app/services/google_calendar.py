@@ -13,6 +13,7 @@ Google API call.
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +73,13 @@ def list_events(
     time_max: str | None = None,
     max_results: int = 10,
 ) -> list[dict[str, Any]]:
+    # Live-caught bug: Google's API does NOT default timeMin to "now" when
+    # omitted -- it returns events from the start of the calendar's entire
+    # history instead (observed live: events from 2025 came back ahead of
+    # 2026 ones). "list my events"/"what's upcoming" means from now on, so
+    # default it here rather than let every caller get this wrong.
+    if time_min is None:
+        time_min = datetime.now(timezone.utc).isoformat()
     try:
         response = (
             _get_service()
