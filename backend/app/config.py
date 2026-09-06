@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5-coder:7b"
     ollama_embedding_model: str = "nomic-embed-text"
 
+    # Self-hosted speech-to-text (faster-whisper, CPU int8) -- "base.en"
+    # is the balance point on a 2-core CPU box: noticeably more accurate
+    # than "tiny.en" without the latency of "small.en" or larger.
+    whisper_model_size: str = "base.en"
+
     # Falls back to a dependency-free local hashing embedder when true --
     # lets the RAG pipeline run and be tested with no Ollama daemon at all
     # (e.g. on a laptop that doesn't have it installed).

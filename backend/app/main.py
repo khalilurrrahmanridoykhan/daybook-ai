@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import chat
+from app.api import chat, speech
 from app.config import settings
 
 app = FastAPI(
@@ -23,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(chat.router, prefix="/api")
+app.include_router(speech.router, prefix="/api")
 
 
 @app.get("/api/health")
