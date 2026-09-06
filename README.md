@@ -61,18 +61,17 @@ USE_LOCAL_EMBEDDER=true pytest tests/ -v
 
 ## Deployment notes (this project's own VPS deployment)
 
-Deployed to a shared VPS that also runs unrelated production services (a separate CommuniPlan/BRAC malaria-surveillance system) -- deliberately isolated from them: its own directory (`~/apps/ridoy-ai`), its own ports (backend 8300, frontend 3300, chosen clear of every port already in use on that box), no changes to that system's nginx config, systemd units, or database. The only thing shared is the box's pre-existing Ollama daemon, used strictly through its HTTP API -- no changes to its systemd service or already-pulled models.
+**Live at [ai.krrkhan.com](https://ai.krrkhan.com).**
+
+Deployed to a shared VPS that also runs unrelated production services (a separate CommuniPlan/BRAC malaria-surveillance system) -- deliberately isolated from them: its own directory (`~/apps/ridoy-ai`), its own ports (backend 8300, frontend 3300, chosen clear of every port already in use on that box), and its own single nginx site file (`ai-krrkhan-ai.conf`) that was added without opening or editing any of the box's other eight site configs. The only thing shared is the box's pre-existing Ollama daemon, used strictly through its HTTP API -- no changes to its systemd service or already-pulled models.
+
+Public routing: nginx terminates TLS (Let's Encrypt, auto-renewing) at `ai.krrkhan.com` and proxies `/api/` to the backend, everything else to the frontend -- both on the same origin, so the browser never needs CORS at all. `proxy_buffering off` on the `/api/` location was a deliberate, necessary choice: without it, nginx would buffer the whole SSE response and release it all at once instead of streaming token-by-token. `NEXT_PUBLIC_API_BASE_URL` is empty in production for exactly this reason (relative `/api/...` paths); the old two-port SSH-tunnel setup (no reverse proxy in front) needs an explicit absolute URL instead -- see `frontend/.env.example`.
 
 Given the VPS's 2 shared CPU cores (no GPU), a full RAG-grounded chat turn on `qwen2.5-coder:7b` takes roughly 15-45 seconds depending on context size and whether the model is already warm. That's the honest tradeoff of genuinely self-hosted inference on modest hardware, not a bug -- a faster response means either a smaller model (`qwen2.5:3b` runs noticeably faster, at some quality cost) or better hardware, both a one-line `OLLAMA_MODEL` change away.
 
-**Currently running via `setsid`, not systemd** -- survives the SSH session ending, but not a reboot. Promoting to a proper `systemd` unit (matching the pattern of this VPS's other services) needs root, which this session didn't have a password for; that's the next concrete step, not a hidden gap.
+**Currently running via `setsid`, not systemd** -- survives the SSH session ending, but not a reboot. Promoting to a proper `systemd` unit (matching the pattern of this VPS's other services) is the next concrete step, not a hidden gap.
 
-**Not yet exposed publicly** -- reachable only via `127.0.0.1` on the VPS itself, or through an SSH tunnel:
-```bash
-ssh -L 3300:127.0.0.1:3300 -L 8300:127.0.0.1:8300 practice@<vps-ip>
-# then open http://localhost:3300 locally
-```
-Adding a real subdomain + nginx vhost + TLS is a deliberate follow-up decision, not done here, to avoid touching the existing production nginx configuration without an explicit go-ahead.
+**HTTPS is not cosmetic here** -- the browser's microphone API (`getUserMedia`, used for voice input) only works on a secure context, so TLS was a functional requirement for the voice feature to work publicly, not just a nice-to-have.
 
 ## License
 
