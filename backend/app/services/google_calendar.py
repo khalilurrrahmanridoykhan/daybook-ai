@@ -53,6 +53,26 @@ def _get_service():
     return build("calendar", "v3", credentials=_load_credentials(), cache_discovery=False)
 
 
+def _validate_iso_datetime(value: str, field_name: str) -> None:
+    """Live-caught bug: asked to set a reminder, the model called
+    create_event with start='{{current_datetime.local_iso}}T21:00:00' --
+    a literal, unresolved template placeholder, never an actual value
+    from calling current_datetime. Google's API rejects that with an
+    opaque 400 Bad Request, which wasn't a clear enough signal for the
+    model to self-correct -- it repeated the identical broken call three
+    times in a row. Catching it here, before the API call, means the
+    model gets a specific, actionable error instead."""
+    try:
+        datetime.fromisoformat(value)
+    except ValueError as e:
+        raise GoogleCalendarError(
+            f"{field_name}={value!r} is not a real ISO 8601 datetime -- it looks like a placeholder "
+            "or template string, not an actual computed value. Call current_datetime first if you "
+            "don't already know the current date/time, then write out the real value yourself "
+            "(e.g. 2026-10-05T20:00:00+06:00)."
+        ) from e
+
+
 def _summarize_event(event: dict[str, Any]) -> dict[str, Any]:
     start = event.get("start", {})
     end = event.get("end", {})
@@ -80,6 +100,10 @@ def list_events(
     # default it here rather than let every caller get this wrong.
     if time_min is None:
         time_min = datetime.now(timezone.utc).isoformat()
+    else:
+        _validate_iso_datetime(time_min, "time_min")
+    if time_max is not None:
+        _validate_iso_datetime(time_max, "time_max")
     try:
         response = (
             _get_service()
@@ -106,6 +130,10 @@ def create_event(
     description: str | None = None,
     reminder_minutes_before: int | None = None,
 ) -> dict[str, Any]:
+    _validate_iso_datetime(start, "start")
+    if end is not None:
+        _validate_iso_datetime(end, "end")
+
     # No `end` given -> a zero-length event at `start`: the normal shape
     # for a plain point-in-time reminder, not an error.
     body: dict[str, Any] = {

@@ -41,7 +41,12 @@ resolve a relative date ("tomorrow", "next Friday") before passing an exact ISO 
 for a calendar event's start/end specifically, use current_datetime's local_iso, not iso (that one is \
 UTC, and Google Calendar needs the event's own local wall-clock time). A "remind me" request is a \
 create_calendar_event call with reminder_minutes_before set, not a Daybook task, unless the user \
-clearly means a Daybook to-do instead.
+clearly means a Daybook to-do instead. Every tool argument must be a real, already-computed value -- \
+NEVER write a template placeholder like {{{{current_datetime.local_iso}}}} or {{some_variable}} as if \
+it will be substituted later; it will not be, and Google's API will just reject it. If you need the \
+current time for a calendar event, actually call current_datetime first, read its real local_iso value \
+from the tool result, then write that real string (plus your own date/time arithmetic on top of it) \
+into the next call.
 
 Budgets can be set for ANY month -- past, current, or future ("set my budget for October 2026") -- \
 there is no restriction against planning ahead. Never refuse a future-month budget request; just call \
@@ -231,6 +236,7 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
     tools_for_this_turn = None if _is_smalltalk(user_message) else TOOL_SCHEMAS
 
     final_text_parts: list[str] = []
+    last_tool_error: str | None = None
 
     for _round in range(MAX_TOOL_ROUNDS):
         assistant_content = ""
@@ -283,10 +289,25 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
                 result = call_tool(name, arguments)
             except ToolError as e:
                 result = {"error": str(e)}
+            if isinstance(result, dict) and "error" in result:
+                last_tool_error = result["error"]
             yield {"type": "tool_result", "name": name, "result": result}
             messages.append({"role": "tool", "content": str(result)})
         # Loop again so the model gets a fresh turn to use the tool result(s)
         # in its real answer instead of stopping at the tool call itself.
+    else:
+        # Live-caught bug: every one of MAX_TOOL_ROUNDS produced another
+        # tool call and the model never gave a plain-text answer (observed
+        # live: it retried the identical broken create_calendar_event call
+        # three times in a row). Without this, final_text_parts stayed
+        # empty and the user got a silent "done" with no reply at all.
+        fallback = (
+            f"I tried a few times but couldn't complete that -- the last attempt said: {last_tool_error}"
+            if last_tool_error
+            else "I tried a few times but couldn't complete that. Could you try rephrasing?"
+        )
+        final_text_parts.append(fallback)
+        yield {"type": "delta", "content": fallback}
 
     final_text = "".join(final_text_parts)
     memory.append_message(session_id, "assistant", final_text)

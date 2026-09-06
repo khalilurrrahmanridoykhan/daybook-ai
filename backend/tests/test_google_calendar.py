@@ -192,6 +192,46 @@ def test_delete_event_raises_google_calendar_error_on_http_error(monkeypatch):
         google_calendar.delete_event("does-not-exist")
 
 
+class _ExplodingEventsResource:
+    """Fails the test if the Google API is ever actually called -- proves
+    an invalid datetime is rejected before the request goes out, not
+    just that the resulting HttpError gets translated afterwards."""
+
+    def list(self, **kwargs):
+        raise AssertionError("should never reach the API with an invalid datetime")
+
+    def insert(self, **kwargs):
+        raise AssertionError("should never reach the API with an invalid datetime")
+
+
+def test_create_event_rejects_a_template_placeholder_before_calling_the_api(monkeypatch):
+    """Live-caught bug: asked to set a reminder, the model called
+    create_event with start='{{current_datetime.local_iso}}T21:00:00' --
+    a literal, unresolved placeholder, never a real value from actually
+    calling current_datetime. Google's own 400 Bad Request wasn't a clear
+    enough signal for the model to self-correct: it repeated the exact
+    same broken call three times in a row. Must be caught here instead,
+    with a message specific enough to fix the behavior."""
+    _patch_service(monkeypatch, _ExplodingEventsResource())
+
+    with pytest.raises(GoogleCalendarError, match="not a real ISO 8601 datetime"):
+        google_calendar.create_event(summary="x", start="{{current_datetime.local_iso}}T21:00:00")
+
+
+def test_create_event_rejects_an_invalid_end_too(monkeypatch):
+    _patch_service(monkeypatch, _ExplodingEventsResource())
+
+    with pytest.raises(GoogleCalendarError, match="not a real ISO 8601 datetime"):
+        google_calendar.create_event(summary="x", start="2026-10-01T09:00:00+06:00", end="not-a-date")
+
+
+def test_list_events_rejects_an_invalid_time_min(monkeypatch):
+    _patch_service(monkeypatch, _ExplodingEventsResource())
+
+    with pytest.raises(GoogleCalendarError, match="not a real ISO 8601 datetime"):
+        google_calendar.list_events(time_min="{{current_datetime.local_iso}}")
+
+
 def test_load_credentials_raises_clear_error_when_no_token_file(monkeypatch, tmp_path):
     """Live-relevant: before scripts/setup_google_calendar.py has ever been
     run, any calendar tool call must fail with a clear, actionable message

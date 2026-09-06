@@ -472,6 +472,58 @@ def test_stream_chat_turn_executes_a_calendar_reminder_via_structured_tool_calls
     assert tool_results[0]["result"]["id"] == "e1"
 
 
+def test_stream_chat_turn_gives_a_fallback_reply_when_tool_rounds_are_exhausted(monkeypatch, tmp_path):
+    """Live-caught bug: asked to set a reminder, the model called
+    create_calendar_event with an invalid placeholder start, got back a
+    tool error, and just repeated the identical broken call for every one
+    of MAX_TOOL_ROUNDS instead of adjusting -- so the model never gave a
+    plain-text answer at all, and the user got a silent, empty 'done'
+    with no reply. Must fall back to a real message instead."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+
+    def boom(**kw):
+        raise tools.GoogleCalendarError(
+            "start='{{current_datetime.local_iso}}T21:00:00' is not a real ISO 8601 datetime"
+        )
+
+    monkeypatch.setattr(tools.google_calendar, "create_event", boom)
+
+    bad_round = [
+        {
+            "message": {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "create_calendar_event",
+                            "arguments": {"summary": "x", "start": "{{current_datetime.local_iso}}T21:00:00"},
+                        }
+                    }
+                ],
+            },
+            "done": True,
+        }
+    ]
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream([bad_round, bad_round, bad_round]),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "remind me to test this at 9pm"))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert "couldn't complete" in deltas
+    assert "not a real ISO 8601 datetime" in deltas
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert len(tool_calls) == 3  # one per MAX_TOOL_ROUNDS -- it never gave up early
+
+    assert events[-1]["type"] == "done"
+
+
 def test_stream_chat_turn_flushes_brace_prefixed_answer_that_is_not_a_tool_call(monkeypatch, tmp_path):
     _empty_knowledge_store(monkeypatch)
     monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
