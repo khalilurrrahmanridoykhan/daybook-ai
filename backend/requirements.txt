@@ -9,4 +9,5 @@ faster-whisper==1.0.3
 requests==2.32.3
 pyjwt==2.9.0
 bcrypt==4.2.0
+psycopg[binary]==3.2.3
 pytest==8.3.3

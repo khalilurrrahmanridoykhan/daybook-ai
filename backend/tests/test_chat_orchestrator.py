@@ -186,7 +186,7 @@ def test_stream_chat_turn_executes_markdown_fenced_fallback_tool_call(monkeypatc
     not shown to the user as a literal code block."""
     _empty_knowledge_store(monkeypatch)
     monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
-    monkeypatch.setattr(tools.daybook_client, "get_budget_summary", lambda **kw: {"month": "2026-09", "summary": {"spent": 12000}})
+    monkeypatch.setattr(tools.daybook_db, "get_budget_summary", lambda **kw: {"month": "2026-09", "summary": {"spent": 12000}})
     monkeypatch.setattr(
         chat_orchestrator.ollama_client,
         "chat_stream",
@@ -235,12 +235,12 @@ def test_stream_chat_turn_flushes_fenced_code_that_is_not_a_tool_call(monkeypatc
 def test_stream_chat_turn_executes_a_real_daybook_tool_via_structured_tool_calls(monkeypatch, tmp_path):
     """End-to-end through the full orchestrator loop, using Ollama's
     well-behaved structured tool_calls field (not the fallback parser)
-    and a real Daybook tool -- create_task -- with daybook_client mocked
+    and a real Daybook tool -- create_task -- with daybook_db mocked
     at the HTTP boundary it would otherwise cross."""
     _empty_knowledge_store(monkeypatch)
     monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
     monkeypatch.setattr(
-        tools.daybook_client,
+        tools.daybook_db,
         "create_task",
         lambda **kw: {"id": "t1", "title": kw["title"], "status": "TODO"},
     )

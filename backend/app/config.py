@@ -37,14 +37,18 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3300"
 
-    # DayBook (the real Next.js app, on Vercel) -- the only place this
-    # backend ever reads or writes real task/note/budget data. Never a
-    # direct database connection: the bridge is Daybook's own /api/ai/*
-    # routes, authenticated with this shared secret, so Daybook's own
-    # validation and business logic is always what runs, never a Python
-    # reimplementation of it.
+    # DayBook (the real Next.js app, on Vercel) -- kept for when a real
+    # Daybook deployment exists separately from this backend. Currently
+    # unused: see database_url below for the self-hosted-now path, where
+    # this backend and the data both live on the same VPS.
     daybook_api_base_url: str = "http://127.0.0.1:3000"
     daybook_ai_secret: str = ""
+
+    # Self-hosted Postgres, applied from Daybook's own Prisma migration SQL
+    # (see scripts/init_daybook_db.sql) -- this backend reads/writes it
+    # directly via app/services/daybook_db.py while there's no separate
+    # Daybook deployment to bridge to over HTTP.
+    database_url: str = ""
 
     # This backend has no auth of its own until now (previously wide open
     # behind CORS only) -- necessary once it gains read/write access to
