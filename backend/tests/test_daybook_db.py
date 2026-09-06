@@ -5,6 +5,9 @@ elsewhere in this suite. Response queues must match the exact order of
 fetchone()/fetchall() calls each function makes.
 """
 
+import json
+from decimal import Decimal
+
 import pytest
 
 from app.services import daybook_db
@@ -183,6 +186,33 @@ def test_get_budget_summary_flags_overspent_envelope(monkeypatch):
     assert envelope["available"] == -4000
     assert envelope["overspent"] is True
     assert result["summary"]["overspentCount"] == 1
+
+
+def test_get_budget_summary_income_is_json_serializable_even_as_decimal(monkeypatch):
+    """Live bug: Postgres promotes SUM(bigint) to numeric to avoid
+    overflow, which psycopg maps to Python's Decimal -- not JSON
+    serializable, and this flows straight into an SSE tool_result. The
+    earlier envelope-math tests used plain ints for the income total and
+    never would have caught this; this one uses the real type psycopg
+    actually returns."""
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    _patch_connect(
+        monkeypatch,
+        FakeCursor(
+            [
+                {"id": "bm1"},
+                {"total": Decimal("500000")},
+                [],
+                [],
+            ]
+        ),
+    )
+
+    result = daybook_db.get_budget_summary(month="2026-09")
+
+    assert result["summary"]["income"] == 500000
+    assert isinstance(result["summary"]["income"], int)
+    json.dumps(result)  # must not raise
 
 
 def test_set_allocation_creates_category_and_budget_month_when_missing(monkeypatch):

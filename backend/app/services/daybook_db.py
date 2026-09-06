@@ -268,8 +268,13 @@ def get_budget_summary(month: str | None = None) -> dict:
             return {"month": month, "summary": None}
         budget_month_id = budget_month["id"]
 
+        # Postgres promotes SUM(bigint) to numeric (to avoid overflow),
+        # which psycopg maps to Decimal -- not JSON-serializable, and this
+        # value flows straight into an SSE tool_result. Cast back to int
+        # here at the data layer's boundary, not further up where a
+        # Decimal would otherwise silently leak into a JSON response.
         cur.execute('SELECT COALESCE(SUM(amount), 0) AS total FROM "IncomeEntry" WHERE "budgetMonthId" = %s', (budget_month_id,))
-        income = cur.fetchone()["total"]
+        income = int(cur.fetchone()["total"])
 
         cur.execute(
             'SELECT a."categoryId", c.name AS "categoryName", a."plannedAmount", a."rolloverIn" '
