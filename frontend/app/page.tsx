@@ -64,8 +64,16 @@ export default function Home() {
   const barRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/chat/sessions`, { method: "POST" })
-      .then((r) => r.json())
+    fetch(`${API_BASE}/api/chat/sessions`, { method: "POST", credentials: "include" })
+      .then((r) => {
+        // Fallback for the two-port tunnel setup, where middleware.ts can't
+        // see a cookie scoped to the backend's separate origin.
+        if (r.status === 401) {
+          window.location.href = "/login";
+          throw new Error("not logged in");
+        }
+        return r.json();
+      })
       .then((data) => setSessionId(data.session_id))
       .catch(() => setError(`Could not reach ${ASSISTANT_NAME}'s backend at ${API_BASE}.`));
   }, []);
@@ -110,6 +118,7 @@ export default function Home() {
       const resp = await fetch(`${API_BASE}/api/chat/sessions/${sessionId}/messages/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ message: text }),
       });
       if (!resp.ok || !resp.body) {
@@ -241,7 +250,11 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.append("file", blob, "clip.webm");
-      const resp = await fetch(`${API_BASE}/api/speech/transcribe`, { method: "POST", body: formData });
+      const resp = await fetch(`${API_BASE}/api/speech/transcribe`, {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
         throw new Error(body.detail ?? `Transcription failed (${resp.status})`);
@@ -267,6 +280,17 @@ export default function Home() {
         <div className="header-top">
           <h1>{ASSISTANT_NAME}</h1>
           <span className={`status-dot ${connectionState}`} title={connectionState} />
+          <button
+            type="button"
+            className="logout-link"
+            onClick={() => {
+              fetch(`${API_BASE}/api/auth/logout`, { method: "POST", credentials: "include" }).finally(() => {
+                window.location.href = "/login";
+              });
+            }}
+          >
+            Log out
+          </button>
         </div>
         <p>Self-hosted, open-weight assistant. Nothing here is sent to Anthropic, OpenAI, or Google.</p>
         <label className="speak-toggle">
