@@ -7,7 +7,12 @@ plain JSON text instead of Ollama's structured tool_calls field.
 from app.rag.embeddings import LocalHashingEmbedder
 from app.rag.store import Document, InMemoryVectorStore, ScoredDocument
 from app.services import chat_orchestrator, memory, tools
-from app.services.chat_orchestrator import _build_system_prompt, _is_smalltalk, _parse_fallback_tool_call
+from app.services.chat_orchestrator import (
+    _build_system_prompt,
+    _is_smalltalk,
+    _parse_fallback_tool_call,
+    _parse_fallback_tool_calls,
+)
 
 
 def test_parse_fallback_tool_call_recognizes_valid_shape():
@@ -44,6 +49,41 @@ def test_parse_fallback_tool_call_recognizes_bare_fence_without_json_tag():
     fenced = '```\n{"name": "get_budget_summary", "arguments": {}}\n```'
     call = _parse_fallback_tool_call(fenced)
     assert call == {"function": {"name": "get_budget_summary", "arguments": {}}}
+
+
+def test_parse_fallback_tool_calls_recognizes_multiple_newline_separated_calls():
+    # Live-observed: asked to set a budget, the model emitted three
+    # separate tool-call-shaped JSON objects, one per line, in a single
+    # message instead of one call or Ollama's structured tool_calls array.
+    content = (
+        '{"name": "set_expected_income", "arguments": {"month": "2026-10", "amount_minor": 5000000}}\n'
+        '{"name": "get_budget_summary", "arguments": {"month": "2026-10"}}\n'
+        '{"name": "get_budget_summary", "arguments": {"month": "2026-10"}}'
+    )
+    calls = _parse_fallback_tool_calls(content)
+    assert calls == [
+        {"function": {"name": "set_expected_income", "arguments": {"month": "2026-10", "amount_minor": 5000000}}},
+        {"function": {"name": "get_budget_summary", "arguments": {"month": "2026-10"}}},
+        {"function": {"name": "get_budget_summary", "arguments": {"month": "2026-10"}}},
+    ]
+
+
+def test_parse_fallback_tool_calls_returns_single_item_list_for_one_call():
+    calls = _parse_fallback_tool_calls('{"name": "current_datetime", "arguments": {}}')
+    assert calls == [{"function": {"name": "current_datetime", "arguments": {}}}]
+
+
+def test_parse_fallback_tool_calls_rejects_multiline_prose():
+    # A genuine multi-line answer must never be misread as a batch of calls.
+    content = "Here's what I found:\nYour budget looks good this month."
+    assert _parse_fallback_tool_calls(content) is None
+
+
+def test_parse_fallback_tool_calls_rejects_mixed_valid_and_invalid_lines():
+    # If even one line isn't a valid call, the whole thing is rejected --
+    # no partial execution of a batch that might not really be one.
+    content = '{"name": "current_datetime", "arguments": {}}\nand then I will explain further'
+    assert _parse_fallback_tool_calls(content) is None
 
 
 def test_parse_fallback_tool_call_rejects_fenced_code_that_is_not_a_tool_call():
@@ -230,6 +270,47 @@ def test_stream_chat_turn_flushes_fenced_code_that_is_not_a_tool_call(monkeypatc
     deltas = "".join(e["content"] for e in events if e["type"] == "delta")
     assert deltas == '```python\nprint("hi")\n```'
     assert [e["type"] for e in events if e["type"] == "tool_call"] == []
+
+
+def test_stream_chat_turn_executes_multiple_newline_separated_fallback_calls(monkeypatch, tmp_path):
+    """Live bug, same chat as the markdown-fence one: asked to set a
+    budget, the model emitted three tool calls as separate JSON lines in
+    one message. All three must execute, in order, and none of the raw
+    JSON may leak to the user."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(tools.daybook_db, "set_expected_income", lambda **kw: {"month": kw["month"], "expectedIncome": kw["amount_minor"]})
+    monkeypatch.setattr(tools.daybook_db, "get_budget_summary", lambda **kw: {"month": kw["month"], "summary": None})
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                [
+                    {
+                        "message": {
+                            "content": (
+                                '{"name": "set_expected_income", "arguments": {"month": "2026-10", "amount_minor": 5000000}}\n'
+                                '{"name": "get_budget_summary", "arguments": {"month": "2026-10"}}'
+                            )
+                        },
+                        "done": True,
+                    }
+                ],
+                [{"message": {"content": "Set October's income to 50,000."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "set my October 2026 income to 50000"))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert deltas == "Set October's income to 50,000."
+    assert '{"name"' not in deltas
+
+    tool_calls = [e["name"] for e in events if e["type"] == "tool_call"]
+    assert tool_calls == ["set_expected_income", "get_budget_summary"]
 
 
 def test_stream_chat_turn_executes_a_real_daybook_tool_via_structured_tool_calls(monkeypatch, tmp_path):

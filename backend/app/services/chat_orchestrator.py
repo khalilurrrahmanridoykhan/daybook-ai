@@ -144,6 +144,33 @@ def _parse_fallback_tool_call(content: str) -> dict[str, Any] | None:
     return {"function": {"name": name, "arguments": arguments}}
 
 
+def _parse_fallback_tool_calls(content: str) -> list[dict[str, Any]] | None:
+    """Some responses contain more than one fallback-shaped call, one JSON
+    object per line -- live-observed alongside the single-object and
+    fenced variants above (the model attempting several tool calls in one
+    turn, e.g. set the income then check the summary twice). Tries the
+    single-call shape first (also covers one call inside a fence); falls
+    back to requiring every non-blank line to independently parse as a
+    valid call, so an ordinary multi-line answer is never misread as a
+    batch of calls just because it happens to have several lines.
+    """
+    single = _parse_fallback_tool_call(content)
+    if single is not None:
+        return [single]
+
+    lines = [line.strip() for line in _strip_code_fence(content).splitlines() if line.strip()]
+    if len(lines) < 2:
+        return None
+
+    calls = []
+    for line in lines:
+        call = _parse_fallback_tool_call(line)
+        if call is None:
+            return None
+        calls.append(call)
+    return calls
+
+
 def _build_system_prompt(user_message: str) -> tuple[str, list[dict[str, Any]]]:
     if _is_smalltalk(user_message):
         retrieved = []
@@ -207,9 +234,9 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
                 break
 
         if not tool_calls:
-            fallback_call = _parse_fallback_tool_call(assistant_content)
-            if fallback_call:
-                tool_calls = [fallback_call]
+            fallback_calls = _parse_fallback_tool_calls(assistant_content)
+            if fallback_calls:
+                tool_calls = fallback_calls
 
         if not tool_calls:
             if suppress_streaming:
