@@ -1,9 +1,22 @@
 """Endpoint-level tests for /api/speech/transcribe -- speech_to_text.transcribe
-is monkeypatched so this never touches a real Whisper model."""
+is monkeypatched so this never touches a real Whisper model. The
+require_session dependency is overridden (not bypassed by omission) so
+these tests exercise the endpoint's own logic, not the auth gate --
+test_auth.py covers the gate itself, including that this router requires
+a session at all."""
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.api.auth import require_session
 from app.main import app
+
+
+@pytest.fixture(autouse=True)
+def _authenticated():
+    app.dependency_overrides[require_session] = lambda: "admin"
+    yield
+    app.dependency_overrides.pop(require_session, None)
 
 
 def test_transcribe_endpoint_returns_text(monkeypatch):
