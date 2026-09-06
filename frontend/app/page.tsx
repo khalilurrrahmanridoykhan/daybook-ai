@@ -23,13 +23,28 @@ type ChatEvent =
   | { type: "done" }
   | { type: "error"; message: string };
 
+function speak(text: string) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window) || !text.trim()) return;
+  // Self-hosted end to end except this: SpeechSynthesis runs locally in the
+  // browser/OS, not a network call to a third party -- consistent with
+  // this assistant's "nothing leaves your infrastructure" promise, just
+  // with noticeably more robotic voice quality than a cloud TTS API.
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [speakReplies, setSpeakReplies] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/chat/sessions`, { method: "POST" })
@@ -42,8 +57,8 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  async function sendMessage() {
-    const text = input.trim();
+  async function sendMessage(overrideText?: string) {
+    const text = (overrideText ?? input).trim();
     if (!text || !sessionId || busy) return;
 
     setError(null);
@@ -58,6 +73,8 @@ export default function Home() {
         return next;
       });
     }
+
+    let fullAssistantText = "";
 
     try {
       const resp = await fetch(`${API_BASE}/api/chat/sessions/${sessionId}/messages/stream`, {
@@ -89,6 +106,7 @@ export default function Home() {
           if (evt.type === "citations") {
             updateAssistant((m) => ({ ...m, citations: evt.citations }));
           } else if (evt.type === "delta") {
+            fullAssistantText += evt.content;
             updateAssistant((m) => ({ ...m, content: m.content + evt.content }));
           } else if (evt.type === "tool_call") {
             updateAssistant((m) => ({
@@ -100,6 +118,8 @@ export default function Home() {
               ...m,
               toolEvents: [...(m.toolEvents ?? []), { name: evt.name, phase: "result", payload: evt.result }],
             }));
+          } else if (evt.type === "done") {
+            if (speakReplies) speak(fullAssistantText);
           } else if (evt.type === "error") {
             setError(evt.message);
           }
@@ -112,11 +132,70 @@ export default function Home() {
     }
   }
 
+  async function toggleRecording() {
+    if (recording) {
+      mediaRecorderRef.current?.stop();
+      setRecording(false);
+      return;
+    }
+
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        await transcribeAndSend(blob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      setError("Couldn't access your microphone -- check your browser's permission for this page.");
+    }
+  }
+
+  async function transcribeAndSend(blob: Blob) {
+    setTranscribing(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", blob, "clip.webm");
+      const resp = await fetch(`${API_BASE}/api/speech/transcribe`, { method: "POST", body: formData });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail ?? `Transcription failed (${resp.status})`);
+      }
+      const { text } = (await resp.json()) as { text: string };
+      if (text.trim()) {
+        await sendMessage(text);
+      } else {
+        setError("Didn't catch any speech in that recording -- try again.");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Transcription failed.");
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
   return (
     <div className="app">
       <div className="header">
         <h1>{ASSISTANT_NAME}</h1>
         <p>Self-hosted, open-weight assistant. Nothing here is sent to Anthropic, OpenAI, or Google.</p>
+        <label className="speak-toggle">
+          <input type="checkbox" checked={speakReplies} onChange={(e) => setSpeakReplies(e.target.checked)} />
+          🔊 Speak replies
+        </label>
       </div>
 
       <div className="messages">
@@ -147,14 +226,22 @@ export default function Home() {
       {error && <div className="error-banner">{error}</div>}
 
       <div className="composer">
+        <button
+          onClick={toggleRecording}
+          disabled={!sessionId || busy || transcribing}
+          className={`mic-button ${recording ? "recording" : ""}`}
+          title={recording ? "Stop recording" : "Record a voice message"}
+        >
+          {recording ? "⏹" : "🎤"}
+        </button>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-          placeholder={sessionId ? "Ask anything…" : "Connecting…"}
-          disabled={!sessionId || busy}
+          placeholder={transcribing ? "Transcribing…" : sessionId ? "Ask anything…" : "Connecting…"}
+          disabled={!sessionId || busy || recording || transcribing}
         />
-        <button onClick={sendMessage} disabled={!sessionId || busy || !input.trim()}>
+        <button onClick={() => sendMessage()} disabled={!sessionId || busy || !input.trim()}>
           Send
         </button>
       </div>
