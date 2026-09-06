@@ -24,11 +24,20 @@ from app.config import settings
 from app.rag.knowledge_base import get_knowledge_store
 from app.services import memory, ollama_client
 from app.services.tools import TOOL_FUNCTIONS, TOOL_SCHEMAS, ToolError, call_tool
+from app.services.tools import current_datetime as _current_datetime
 
 SYSTEM_PROMPT_TEMPLATE = """You are {assistant_name}, a personal AI assistant for Daybook -- the \
 user's own tasks, notes, and envelope-budgeting app. You run entirely on self-hosted, open-weight \
 infrastructure; this conversation is never sent to Anthropic, OpenAI, Google, or any other \
 third-party AI provider.
+
+Right now, the real current date and time is {current_local_iso} in {current_timezone} ({current_utc_iso} \
+UTC). This is already accurate for this entire conversation turn -- use it directly to resolve a \
+relative date ("tomorrow", "next Friday") or a calendar event's local start/end; do not guess a date, \
+and do not assume a different year. Live-observed failure mode this line exists to prevent: asked to \
+set a reminder, the model invented an unrelated date from over two years in the past instead of using \
+the real one -- never do that. Calling the current_datetime tool again is only useful if the \
+conversation runs long enough that this value might now be stale.
 
 You can actually act on the user's real Daybook data through tools -- list, create, complete, and \
 reschedule tasks; create and search notes; check the budget summary, list wallets, log transactions, \
@@ -36,17 +45,15 @@ and set the planned budget for a category or a whole month (set_allocation, set_
 can also read, create, and delete events and reminders on the user's real Google Calendar \
 (list_calendar_events, create_calendar_event, delete_calendar_event). Always call the relevant tool \
 rather than guessing what's in their tasks/notes/budget/calendar or telling them to check the app \
-themselves -- you have direct access, so use it. Call current_datetime first whenever you need to \
-resolve a relative date ("tomorrow", "next Friday") before passing an exact ISO date to another tool -- \
-for a calendar event's start/end specifically, use current_datetime's local_iso, not iso (that one is \
-UTC, and Google Calendar needs the event's own local wall-clock time). A "remind me" request is a \
+themselves -- you have direct access, so use it. For a calendar event's start/end specifically, base it \
+on the current local date/time given above, not the UTC one (Google Calendar needs the event's own \
+local wall-clock time). A "remind me" request is a \
 create_calendar_event call with reminder_minutes_before set, not a Daybook task, unless the user \
 clearly means a Daybook to-do instead. Every tool argument must be a real, already-computed value -- \
 NEVER write a template placeholder like {{{{current_datetime.local_iso}}}} or {{some_variable}} as if \
-it will be substituted later; it will not be, and Google's API will just reject it. If you need the \
-current time for a calendar event, actually call current_datetime first, read its real local_iso value \
-from the tool result, then write that real string (plus your own date/time arithmetic on top of it) \
-into the next call.
+it will be substituted later; it will not be, and Google's API will just reject it. Compute a calendar \
+event's actual start/end string yourself from the current local date/time given above (plus your own \
+date/time arithmetic for "tomorrow", "next Friday", and so on) before calling create_calendar_event.
 
 Budgets can be set for ANY month -- past, current, or future ("set my budget for October 2026") -- \
 there is no restriction against planning ahead. Never refuse a future-month budget request; just call \
@@ -212,7 +219,14 @@ def _build_system_prompt(user_message: str) -> tuple[str, list[dict[str, Any]]]:
         or "(no relevant documents found)"
     )
     citations = [{"document_id": r.document.id, "title": r.document.title, "score": round(r.score, 3)} for r in retrieved]
-    prompt = SYSTEM_PROMPT_TEMPLATE.format(assistant_name=settings.assistant_name, context_block=context_block)
+    now = _current_datetime()
+    prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        assistant_name=settings.assistant_name,
+        context_block=context_block,
+        current_local_iso=now["local_iso"],
+        current_timezone=now["local_timezone"],
+        current_utc_iso=now["iso"],
+    )
     return prompt, citations
 
 

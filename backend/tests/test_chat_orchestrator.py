@@ -153,6 +153,25 @@ def test_build_system_prompt_says_no_relevant_documents_when_everything_is_below
     assert "(no relevant documents found)" in prompt
 
 
+def test_build_system_prompt_includes_the_real_current_local_time(monkeypatch):
+    """Structural fix for a live-caught bug: asked to set a reminder, the
+    model invented a date over two years in the past instead of ever
+    calling current_datetime. Making the current time a passive fact in
+    every system prompt -- not something the model has to remember to
+    fetch -- closes that failure mode regardless of the model's own
+    tool-calling reliability."""
+    monkeypatch.setattr(chat_orchestrator.settings, "local_timezone", "Asia/Dhaka")
+    monkeypatch.setattr(chat_orchestrator, "get_knowledge_store", lambda: _ExplodingStore())
+
+    prompt, _ = _build_system_prompt("hi")
+
+    now = tools.current_datetime()
+    # Compare down to the minute, not the exact second -- the two calls
+    # to current_datetime() aren't guaranteed to land in the same second.
+    assert now["local_iso"][:16] in prompt
+    assert "Asia/Dhaka" in prompt
+
+
 def _empty_knowledge_store(monkeypatch):
     monkeypatch.setattr(
         chat_orchestrator, "get_knowledge_store", lambda: InMemoryVectorStore(embedder=LocalHashingEmbedder())
