@@ -32,6 +32,25 @@ def test_parse_fallback_tool_call_rejects_trailing_prose():
     assert _parse_fallback_tool_call('{"name": "current_datetime", "arguments": {}} and that is the answer') is None
 
 
+def test_parse_fallback_tool_call_recognizes_markdown_fenced_json():
+    # Live-observed variant: the model wraps the same JSON shape in a
+    # ```json ... ``` fence instead of emitting it bare.
+    fenced = '```json\n{"name": "get_budget_summary", "arguments": {}}\n```'
+    call = _parse_fallback_tool_call(fenced)
+    assert call == {"function": {"name": "get_budget_summary", "arguments": {}}}
+
+
+def test_parse_fallback_tool_call_recognizes_bare_fence_without_json_tag():
+    fenced = '```\n{"name": "get_budget_summary", "arguments": {}}\n```'
+    call = _parse_fallback_tool_call(fenced)
+    assert call == {"function": {"name": "get_budget_summary", "arguments": {}}}
+
+
+def test_parse_fallback_tool_call_rejects_fenced_code_that_is_not_a_tool_call():
+    fenced = '```json\n{"foo": "bar"}\n```'
+    assert _parse_fallback_tool_call(fenced) is None
+
+
 def test_is_smalltalk_matches_common_greetings_case_and_punctuation_insensitive():
     for message in ["hi", "Hi!", "HELLO", "  hey  ", "Thanks!", "good morning", "How are you?"]:
         assert _is_smalltalk(message) is True
@@ -158,6 +177,59 @@ def test_stream_chat_turn_executes_fallback_json_tool_call(monkeypatch, tmp_path
 
     tool_results = [e for e in events if e["type"] == "tool_result"]
     assert tool_results[0]["result"]["utc"] is True
+
+
+def test_stream_chat_turn_executes_markdown_fenced_fallback_tool_call(monkeypatch, tmp_path):
+    """The exact bug observed live: the model answers "tell me about my
+    budget" by emitting the tool call wrapped in a ```json fence instead
+    of bare JSON or structured tool_calls. Must be caught and executed,
+    not shown to the user as a literal code block."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(tools.daybook_client, "get_budget_summary", lambda **kw: {"month": "2026-09", "summary": {"spent": 12000}})
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                [
+                    {
+                        "message": {"content": '```json\n{"name": "get_budget_summary", "arguments": {}}\n```'},
+                        "done": True,
+                    }
+                ],
+                [{"message": {"content": "You've spent 120.00 so far this month."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "tell me about my budget"))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert deltas == "You've spent 120.00 so far this month."
+    assert "```" not in deltas
+    assert '{"name"' not in deltas
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert tool_calls == [{"type": "tool_call", "name": "get_budget_summary", "arguments": {}}]
+
+
+def test_stream_chat_turn_flushes_fenced_code_that_is_not_a_tool_call(monkeypatch, tmp_path):
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream([[{"message": {"content": '```python\nprint("hi")\n```'}, "done": True}]]),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "show me a hello world in python"))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert deltas == '```python\nprint("hi")\n```'
+    assert [e["type"] for e in events if e["type"] == "tool_call"] == []
 
 
 def test_stream_chat_turn_executes_a_real_daybook_tool_via_structured_tool_calls(monkeypatch, tmp_path):

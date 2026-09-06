@@ -16,6 +16,7 @@ Event types yielded to the API layer (and re-emitted as SSE):
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -83,23 +84,44 @@ def _is_smalltalk(message: str) -> bool:
     return message.strip().lower() in _SMALLTALK_PATTERNS
 
 
+_CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    """Strips a single wrapping ```/```json ... ``` fence, if present.
+    Live-observed variant of the fallback-tool-call shape: the model
+    sometimes wraps its {"name": ..., "arguments": {...}} JSON in a
+    markdown code block instead of emitting it bare."""
+    match = _CODE_FENCE_RE.match(text.strip())
+    return match.group(1).strip() if match else text
+
+
+def _looks_like_a_tool_call_attempt(text: str) -> bool:
+    """Cheap, pre-parse check used to decide whether to hold a response
+    back from the live stream -- both shapes _parse_fallback_tool_call can
+    turn into a real tool call start this way."""
+    stripped = text.lstrip()
+    return stripped.startswith("{") or stripped.startswith("```")
+
+
 def _parse_fallback_tool_call(content: str) -> dict[str, Any] | None:
     """Some models (qwen2.5-coder:7b included, as run by this Ollama
     install) understand a tool-use request correctly but emit the call as
-    plain JSON text -- {"name": ..., "arguments": {...}} -- instead of
-    populating Ollama's structured message.tool_calls field. Verified
-    directly against this instance's raw /api/chat response, not assumed.
+    plain JSON text -- {"name": ..., "arguments": {...}}, sometimes wrapped
+    in a markdown code fence -- instead of populating Ollama's structured
+    message.tool_calls field. Verified directly against this instance's
+    raw /api/chat response, not assumed.
 
     Rather than silently treating that as a normal text answer (which
     would make tool-use appear broken even though the model clearly
-    intended to call a tool), this recognizes that exact shape and
-    synthesizes the same structure a well-behaved tool_calls response
-    would have had. Deliberately strict: the whole trimmed content must
-    parse as a JSON object with a "name" naming a real tool and an
-    "arguments" object -- so an ordinary text answer that happens to
-    mention a tool by name is never misread as a call.
+    intended to call a tool), this recognizes that shape and synthesizes
+    the same structure a well-behaved tool_calls response would have had.
+    Deliberately strict: once any wrapping fence is stripped, the whole
+    remaining text must parse as a JSON object with a "name" naming a real
+    tool and an "arguments" object -- so an ordinary text answer (fenced
+    code example included) is never misread as a call.
     """
-    stripped = content.strip()
+    stripped = _strip_code_fence(content)
     if not (stripped.startswith("{") and stripped.endswith("}")):
         return None
     try:
@@ -153,12 +175,12 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
     for _round in range(MAX_TOOL_ROUNDS):
         assistant_content = ""
         tool_calls: list[dict[str, Any]] = []
-        # A response that opens with '{' might turn out to be a
-        # plain-text-disguised tool call (see _parse_fallback_tool_call) --
-        # held back from the live stream until the round finishes and we
-        # know which it was, so a raw JSON blob never gets shown to the
-        # user as if it were a real answer. Anything else streams live as
-        # it arrives, same as before.
+        # A response that opens with '{' or a markdown code fence might
+        # turn out to be a plain-text-disguised tool call (see
+        # _parse_fallback_tool_call) -- held back from the live stream
+        # until the round finishes and we know which it was, so a raw
+        # JSON blob never gets shown to the user as if it were a real
+        # answer. Anything else streams live as it arrives, same as before.
         suppress_streaming = False
 
         for chunk in ollama_client.chat_stream(messages, tools=TOOL_SCHEMAS):
@@ -168,7 +190,7 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
                 was_first_delta = assistant_content == ""
                 assistant_content += delta
                 if was_first_delta:
-                    suppress_streaming = assistant_content.lstrip().startswith("{")
+                    suppress_streaming = _looks_like_a_tool_call_attempt(assistant_content)
                 if not suppress_streaming:
                     final_text_parts.append(delta)
                     yield {"type": "delta", "content": delta}
@@ -186,7 +208,8 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
             if suppress_streaming:
                 # Looked like it might become a tool call but didn't parse
                 # as one -- an ordinary answer that just happens to start
-                # with '{'. Flush it now, since nothing was streamed live.
+                # with '{' or a code fence (e.g. a real code example).
+                # Flush it now, since nothing was streamed live.
                 final_text_parts.append(assistant_content)
                 yield {"type": "delta", "content": assistant_content}
             break
