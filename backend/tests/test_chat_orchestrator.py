@@ -558,3 +558,112 @@ def test_stream_chat_turn_flushes_brace_prefixed_answer_that_is_not_a_tool_call(
     deltas = "".join(e["content"] for e in events if e["type"] == "delta")
     assert deltas == "{not actually json}"
     assert [e["type"] for e in events if e["type"] == "tool_call"] == []
+
+
+def test_stream_chat_turn_retries_when_model_falsely_claims_a_task_was_added(monkeypatch, tmp_path):
+    """Live-caught bug: asked to add a task, the model replied 'Task
+    added: X' in plain prose -- twice, in the same real conversation --
+    without ever calling create_task. Neither the structured tool_calls
+    field nor the fallback JSON parser catches this, since there's no
+    JSON at all, just confident, false prose. Confirmed live: the task
+    never existed in the database despite the confident reply."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(
+        tools.daybook_db,
+        "create_task",
+        lambda **kw: {"id": "t1", "title": kw["title"], "status": "TODO"},
+    )
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                # Round 1: a false claim, no tool_calls at all.
+                [{"message": {"content": "Task added: Make the GeoAI Models Building."}, "done": True}],
+                # Round 2 (the forced retry): this time it actually calls the tool.
+                [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {"function": {"name": "create_task", "arguments": {"title": "Make the GeoAI Models Building"}}}
+                            ],
+                        },
+                        "done": True,
+                    }
+                ],
+                # Round 3: the model's real answer, now that the tool result exists.
+                [{"message": {"content": "Done -- I've added that task for real this time."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "Add a task to Make the GeoAI Models Building."))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert "Task added: Make the GeoAI Models Building." in deltas  # the false claim is visible, not hidden
+    assert "wasn't actually done yet" in deltas  # the visible self-correction
+    assert deltas.endswith("Done -- I've added that task for real this time.")
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert tool_calls == [{"type": "tool_call", "name": "create_task", "arguments": {"title": "Make the GeoAI Models Building"}}]
+
+
+def test_stream_chat_turn_only_retries_once_for_a_false_claim(monkeypatch, tmp_path):
+    """If the retry itself doesn't call a tool either, that answer goes
+    through as-is rather than looping forever."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                [{"message": {"content": "Task added: X."}, "done": True}],
+                [{"message": {"content": "Task added: X, for real this time."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "add a task"))
+
+    assert events[-1]["type"] == "done"
+    assert [e["type"] for e in events if e["type"] == "tool_call"] == []
+
+
+def test_stream_chat_turn_does_not_retry_when_a_tool_was_already_called(monkeypatch, tmp_path):
+    """The false-claim pattern can appear in a perfectly legitimate final
+    answer too, e.g. reporting the result of a tool call that really did
+    happen -- must not trigger a spurious retry in that case."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(tools.daybook_db, "create_task", lambda **kw: {"id": "t1", "title": kw["title"]})
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [{"function": {"name": "create_task", "arguments": {"title": "Buy milk"}}}],
+                        },
+                        "done": True,
+                    }
+                ],
+                [{"message": {"content": "Task added: Buy milk."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "add a task to buy milk"))
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert deltas == "Task added: Buy milk."  # no self-correction appended
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert len(tool_calls) == 1  # not retried a second time

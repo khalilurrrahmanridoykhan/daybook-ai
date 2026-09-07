@@ -79,6 +79,12 @@ You always have direct tool access -- never show the user a tool call's JSON syn
 something needs to be set, either call the tool yourself right now or plainly ask them for the missing \
 detail in a normal sentence.
 
+NEVER claim you created, changed, or deleted something ("Task added: X", "Event created", "Reminder \
+set", "Logged that expense") unless you actually called the matching tool THIS turn and it returned \
+success -- a sentence describing an action is not the same as taking it, and saying so without calling \
+the tool is a real, confirmed bug, not a harmless shortcut. If you are only explaining how something \
+works, or answering a question, say so plainly instead of writing a fake confirmation.
+
 Money in Daybook is minor units (e.g. poisha for BDT, cents for USD) -- when the user says an amount \
 in everyday terms ("500 taka", "$12.50"), convert it to minor units yourself (multiply by 100) \
 before calling a tool that takes an amount; when you report a summary back to the user, convert minor \
@@ -100,6 +106,28 @@ context_documents:
 """
 
 MAX_TOOL_ROUNDS = 3
+
+# Live-caught bug: asked to add a task, the model replied "Task added: X"
+# in plain prose -- twice, in the same conversation -- without ever
+# calling create_task. Neither the structured tool_calls field nor the
+# fallback JSON parser (_parse_fallback_tool_call) catches this, since
+# there's no JSON at all to parse, just confident, false prose. This
+# pattern is intentionally narrow (specific phrase combinations, not a
+# bare word like "added") to keep false positives rare -- see
+# stream_chat_turn's use of it for the bounded, one-time corrective retry
+# this triggers.
+_FALSE_ACTION_CLAIM_PATTERN = re.compile(
+    r"\b("
+    r"task added|added (a |the )?task|"
+    r"event created|created (the |an )?event|"
+    r"reminder set|set (the |a )?reminder|added to (your |the )?calendar|"
+    r"logged (the |your )?(expense|transaction)|expense (logged|added)|"
+    r"deleted (the|your)|marked (as )?done|"
+    r"budget (has been |was )?set|"
+    r"note (added|created|saved)"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # Measured, not assumed: retrieval scores for "hi" (0.43-0.51 against this
 # project's actual knowledge base, via real nomic-embed-text embeddings)
@@ -256,8 +284,13 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
 
     final_text_parts: list[str] = []
     last_tool_error: str | None = None
+    any_tool_called = False
+    false_claim_retried = False
+    max_rounds = MAX_TOOL_ROUNDS
 
-    for _round in range(MAX_TOOL_ROUNDS):
+    _round = 0
+    while _round < max_rounds:
+        _round += 1
         assistant_content = ""
         tool_calls: list[dict[str, Any]] = []
         # A response that opens with '{' or a markdown code fence might
@@ -297,8 +330,40 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
                 # Flush it now, since nothing was streamed live.
                 final_text_parts.append(assistant_content)
                 yield {"type": "delta", "content": assistant_content}
+
+            # Live-caught bug: asked to add a task, the model replied
+            # "Task added: X" -- twice, in the same conversation -- without
+            # ever calling create_task. Neither the structured tool_calls
+            # field nor the fallback JSON parser catches this, since
+            # there's no JSON at all, just confident prose. One corrective
+            # retry, forcing tools back on and telling it plainly it
+            # didn't actually do anything, rather than silently forwarding
+            # a claim that's false. Bounded to once per turn -- if the
+            # retry also doesn't call a tool, that answer goes through
+            # as-is rather than looping forever.
+            if not any_tool_called and not false_claim_retried and _FALSE_ACTION_CLAIM_PATTERN.search(assistant_content):
+                false_claim_retried = True
+                correction = "\n\n(That wasn't actually done yet -- let me do it now.)"
+                final_text_parts.append(correction)
+                yield {"type": "delta", "content": correction}
+                messages.append({"role": "assistant", "content": assistant_content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "You just said that was done, but you did not call any tool to actually do "
+                            "it. Call the correct tool now to really perform this action, then tell me "
+                            "the real result."
+                        ),
+                    }
+                )
+                tools_for_this_turn = TOOL_SCHEMAS  # force tools on even if this turn started as smalltalk
+                max_rounds += 1
+                continue
+
             break
 
+        any_tool_called = True
         messages.append({"role": "assistant", "content": assistant_content, "tool_calls": tool_calls})
         for call in tool_calls:
             name = call["function"]["name"]
