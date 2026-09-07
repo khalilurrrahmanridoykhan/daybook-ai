@@ -6,9 +6,10 @@ import {
   Clock,
   FileText,
   Loader2,
-  Menu,
   Mic,
   MoreVertical,
+  PanelLeft,
+  PanelRight,
   Pencil,
   Plus,
   Square,
@@ -17,6 +18,17 @@ import {
   Volume2,
   Wrench,
 } from "lucide-react";
+import RightSidebar from "@/components/RightSidebar";
+
+// Below this, three columns (chat history | chat | tasks/schedule/
+// expenses) don't fit -- both side panels start collapsed so the chat
+// itself is usable immediately, opened back up via the header's panel
+// toggle buttons as full-screen overlays (see globals.css).
+const NARROW_SCREEN_BREAKPOINT = 900;
+
+function isNarrowScreen(): boolean {
+  return typeof window !== "undefined" && window.innerWidth <= NARROW_SCREEN_BREAKPOINT;
+}
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8300";
 const ASSISTANT_NAME = process.env.NEXT_PUBLIC_ASSISTANT_NAME ?? "DayBook AI";
@@ -62,7 +74,8 @@ function formatDuration(ms: number): string {
 export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [leftVisible, setLeftVisible] = useState(true);
+  const [rightVisible, setRightVisible] = useState(true);
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -115,7 +128,7 @@ export default function Home() {
     setSessionId(id);
     localStorage.setItem(SESSION_STORAGE_KEY, id);
     setMenuOpenId(null);
-    setSidebarOpen(false);
+    if (isNarrowScreen()) setLeftVisible(false);
   }
 
   async function startNewChat() {
@@ -130,7 +143,7 @@ export default function Home() {
     setSessionId(data.session_id);
     localStorage.setItem(SESSION_STORAGE_KEY, data.session_id);
     setMenuOpenId(null);
-    setSidebarOpen(false);
+    if (isNarrowScreen()) setLeftVisible(false);
   }
 
   async function deleteSession(id: string) {
@@ -185,6 +198,16 @@ export default function Home() {
       refreshSessions();
     }
   }
+
+  // Both side panels default to open (everything visible at a glance),
+  // but that's the wrong starting point on a phone -- collapse both once,
+  // on mount, only if the screen is actually narrow.
+  useEffect(() => {
+    if (isNarrowScreen()) {
+      setLeftVisible(false);
+      setRightVisible(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (editingId) renameInputRef.current?.select();
@@ -421,10 +444,10 @@ export default function Home() {
   const connectionState = error && !sessionId ? "offline" : sessionId ? "online" : "connecting";
 
   return (
-    <div className={`layout ${sidebarOpen ? "sidebar-open" : ""}`}>
-      {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+    <div className="layout">
+      {leftVisible && <div className="sidebar-backdrop" onClick={() => setLeftVisible(false)} />}
 
-      <aside className="sidebar">
+      <aside className={`sidebar ${!leftVisible ? "sidebar-hidden" : ""}`}>
         <button type="button" className="new-chat-button" onClick={startNewChat}>
           <Plus size={16} /> New chat
         </button>
@@ -480,15 +503,23 @@ export default function Home() {
           <div className="header-top">
             <button
               type="button"
-              className="sidebar-toggle"
-              onClick={() => setSidebarOpen((v) => !v)}
+              className="panel-toggle"
+              onClick={() => setLeftVisible((v) => !v)}
               title="Chat history"
             >
-              <Menu size={20} />
+              <PanelLeft size={19} />
             </button>
             <h1>{ASSISTANT_NAME}</h1>
             <span className={`status-dot ${connectionState}`} title={connectionState} />
             <div className="header-actions">
+              <button
+                type="button"
+                className="panel-toggle"
+                onClick={() => setRightVisible((v) => !v)}
+                title="Tasks, schedule & expenses"
+              >
+                <PanelRight size={19} />
+              </button>
               <button
                 type="button"
                 className="logout-link"
@@ -611,6 +642,9 @@ export default function Home() {
           </button>
         </div>
       </div>
+
+      {rightVisible && <div className="sidebar-backdrop" onClick={() => setRightVisible(false)} />}
+      <RightSidebar hidden={!rightVisible} />
     </div>
   );
 }

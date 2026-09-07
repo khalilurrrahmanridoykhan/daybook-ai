@@ -54,6 +54,19 @@ body {
   flex-direction: column;
   padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom));
   gap: 8px;
+  transition: width 0.15s ease, padding 0.15s ease, border-color 0.15s ease;
+}
+
+/* Desktop collapse (the panel-toggle buttons in the header) -- shrinks
+   to nothing rather than overlaying, since there's room to just give the
+   chat that space back. Overridden for an off-screen overlay instead
+   under the narrow-screen media query below. */
+.sidebar.sidebar-hidden {
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border-color: transparent;
+  overflow: hidden;
 }
 
 .sidebar-backdrop {
@@ -205,8 +218,11 @@ body {
   color: var(--danger);
 }
 
-.sidebar-toggle {
-  display: none;
+/* Header buttons that show/hide each side panel -- always visible, on
+   every screen size, not just mobile: both panels are meant to be
+   genuinely collapsible on desktop too, not just auto-hidden on phones. */
+.panel-toggle {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   background: none;
@@ -214,34 +230,56 @@ body {
   color: var(--text);
   cursor: pointer;
   padding: 4px 6px;
-  margin-right: 2px;
   border-radius: 6px;
   flex-shrink: 0;
 }
 
-.sidebar-toggle:hover {
+.panel-toggle:hover {
   background: var(--panel-raised);
 }
 
-@media (max-width: 760px) {
-  .sidebar-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
+/* Below this width, three columns don't fit -- both side panels become
+   full-screen overlays (with a backdrop) instead of flex columns that
+   would otherwise squeeze the chat down to nothing. */
+@media (max-width: 900px) {
+  .sidebar,
+  .right-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 30;
+    width: 280px;
+    max-width: 85vw;
+    transition: transform 0.2s ease-out;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.4);
   }
 
   .sidebar {
-    position: fixed;
-    top: 0;
     left: 0;
-    bottom: 0;
-    z-index: 30;
     transform: translateX(-100%);
-    transition: transform 0.2s ease-out;
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
   }
 
-  .layout.sidebar-open .sidebar {
+  .right-sidebar {
+    right: 0;
+    transform: translateX(100%);
+  }
+
+  /* On a narrow screen "hidden" always means off-screen via transform,
+     never the desktop width-collapse rule above. */
+  .sidebar.sidebar-hidden,
+  .right-sidebar.sidebar-hidden {
+    width: 280px;
+    max-width: 85vw;
+    padding: 12px;
+    border-color: var(--border);
+    overflow: visible;
+  }
+
+  .sidebar:not(.sidebar-hidden) {
+    transform: translateX(0);
+  }
+
+  .right-sidebar:not(.sidebar-hidden) {
     transform: translateX(0);
   }
 
@@ -252,6 +290,255 @@ body {
     background: rgba(0, 0, 0, 0.5);
     z-index: 25;
   }
+}
+
+/* ---------- right sidebar (tasks / schedule / expenses) ---------- */
+
+.right-sidebar {
+  width: 300px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  transition: width 0.15s ease, border-color 0.15s ease;
+}
+
+.right-sidebar.sidebar-hidden {
+  width: 0;
+  border-color: transparent;
+  overflow: hidden;
+}
+
+.right-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.right-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 12px 4px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.right-tab:hover {
+  color: var(--text);
+}
+
+.right-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.right-tab-content {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  height: 100%;
+}
+
+.panel-add-row {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.panel-add-row.column {
+  flex-direction: column;
+}
+
+.panel-add-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.panel-add-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.panel-add-row .amount-input {
+  flex: 0 0 90px;
+}
+
+.panel-add-row button {
+  background: var(--accent);
+  border: none;
+  color: white;
+  border-radius: 8px;
+  width: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.panel-add-row button:hover {
+  background: #6f9aff;
+}
+
+.panel-error {
+  font-size: 12px;
+  color: var(--danger);
+  background: #3a1f24;
+  border: 1px solid #6b2a33;
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+.panel-empty {
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px 0;
+}
+
+.panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.panel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 6px;
+  border-radius: 8px;
+}
+
+.panel-item:hover {
+  background: var(--panel-raised);
+}
+
+.item-check {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--success);
+  cursor: pointer;
+  padding: 0;
+}
+
+.item-check.checked {
+  border-color: var(--success);
+}
+
+.item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.item-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  cursor: text;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-title.done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.item-subtext {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.item-subtext.positive {
+  color: var(--success);
+}
+
+.item-edit-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 13px;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.item-edit-input:focus {
+  outline: none;
+}
+
+.item-delete {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  padding: 4px;
+  border-radius: 6px;
+  display: flex;
+}
+
+.panel-item:hover .item-delete {
+  opacity: 1;
+}
+
+.item-delete:hover {
+  color: var(--danger);
+  background: var(--border);
+}
+
+.budget-strip {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  flex-shrink: 0;
 }
 
 /* ---------- header ---------- */

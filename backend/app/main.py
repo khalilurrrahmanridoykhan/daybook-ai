@@ -1,7 +1,7 @@
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, chat, speech, voice
+from app.api import auth, budget, calendar_events, chat, speech, tasks, voice
 from app.api.auth import require_session
 from app.config import settings
 
@@ -28,6 +28,12 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api")
 app.include_router(chat.router, prefix="/api", dependencies=[Depends(require_session)])
 app.include_router(speech.router, prefix="/api", dependencies=[Depends(require_session)])
+# The dashboard's direct-CRUD routers (Tasks/Schedule/Expenses tabs) --
+# same cookie session as chat/speech, just a faster no-model-involved path
+# to the same underlying data.
+app.include_router(tasks.router, prefix="/api", dependencies=[Depends(require_session)])
+app.include_router(calendar_events.router, prefix="/api", dependencies=[Depends(require_session)])
+app.include_router(budget.router, prefix="/api", dependencies=[Depends(require_session)])
 # Its own bearer-token auth (see require_voice_key), not the cookie
 # session above -- a Siri Shortcut can't hold a browser session.
 app.include_router(voice.router, prefix="/api")

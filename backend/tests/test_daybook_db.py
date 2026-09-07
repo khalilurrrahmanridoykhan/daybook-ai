@@ -124,6 +124,91 @@ def test_complete_task_raises_when_task_not_found(monkeypatch):
         daybook_db.complete_task("does-not-exist")
 
 
+def test_update_task_only_sets_the_given_fields(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    cursor = _patch_connect(monkeypatch, FakeCursor([{"id": "t1", "title": "New title"}]))
+
+    result = daybook_db.update_task("t1", title="New title")
+
+    assert result == {"id": "t1", "title": "New title"}
+    update_query, _ = cursor.queries[0]
+    assert '"title" = %s' in update_query
+    assert '"details"' not in update_query
+
+
+def test_update_task_marking_done_also_sets_completed_at(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    cursor = _patch_connect(monkeypatch, FakeCursor([{"id": "t1", "status": "DONE"}]))
+
+    daybook_db.update_task("t1", status="DONE")
+
+    update_query, _ = cursor.queries[0]
+    assert '"status" = %s' in update_query
+    assert '"completedAt" = %s' in update_query
+
+
+def test_update_task_clearing_completed_at_when_reopened(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    cursor = _patch_connect(monkeypatch, FakeCursor([{"id": "t1", "status": "TODO"}]))
+
+    daybook_db.update_task("t1", status="TODO")
+
+    _, update_params = cursor.queries[0]
+    # fields.values() order is [status, completedAt, updatedAt, task_id, user_id]
+    assert update_params[1] is None  # completedAt cleared, not left stale from a prior completion
+
+
+def test_update_task_with_no_fields_raises(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    with pytest.raises(DaybookDbError, match="No fields given"):
+        daybook_db.update_task("t1")
+
+
+def test_update_task_raises_when_not_found(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    _patch_connect(monkeypatch, FakeCursor([None]))
+    with pytest.raises(DaybookDbError, match="No task"):
+        daybook_db.update_task("does-not-exist", title="x")
+
+
+def test_list_transactions_returns_empty_when_month_not_found(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    _patch_connect(monkeypatch, FakeCursor([None]))
+    assert daybook_db.list_transactions(month="2026-11") == []
+
+
+def test_list_transactions_returns_rows_with_category_name(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    _patch_connect(
+        monkeypatch,
+        FakeCursor(
+            [
+                {"id": "bm1"},
+                [{"id": "tx1", "categoryId": "c1", "categoryName": "Groceries", "amount": 5000, "direction": "EXPENSE"}],
+            ]
+        ),
+    )
+    result = daybook_db.list_transactions(month="2026-09")
+    assert result == [{"id": "tx1", "categoryId": "c1", "categoryName": "Groceries", "amount": 5000, "direction": "EXPENSE"}]
+
+
+def test_delete_transaction_raises_when_not_found(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    fake_cursor = FakeCursor([])
+    fake_cursor.rowcount = 0
+    _patch_connect(monkeypatch, fake_cursor)
+    with pytest.raises(DaybookDbError, match="No transaction"):
+        daybook_db.delete_transaction("does-not-exist")
+
+
+def test_delete_transaction_succeeds(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    fake_cursor = FakeCursor([])
+    fake_cursor.rowcount = 1
+    _patch_connect(monkeypatch, fake_cursor)
+    assert daybook_db.delete_transaction("tx1") == {"deleted": True}
+
+
 def test_get_budget_summary_returns_none_when_month_not_found(monkeypatch):
     monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
     _patch_connect(monkeypatch, FakeCursor([None]))

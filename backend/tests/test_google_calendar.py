@@ -23,9 +23,10 @@ class _FakeExecutable:
 
 
 class _FakeEventsResource:
-    def __init__(self, list_result=None, insert_result=None):
+    def __init__(self, list_result=None, insert_result=None, patch_result=None):
         self._list_result = list_result
         self._insert_result = insert_result
+        self._patch_result = patch_result
         self.calls: dict[str, dict] = {}
 
     def list(self, **kwargs):
@@ -39,6 +40,10 @@ class _FakeEventsResource:
     def delete(self, **kwargs):
         self.calls["delete"] = kwargs
         return _FakeExecutable(None)
+
+    def patch(self, **kwargs):
+        self.calls["patch"] = kwargs
+        return _FakeExecutable(self._patch_result)
 
 
 class _FakeService:
@@ -181,6 +186,37 @@ def test_delete_event_returns_deleted_id(monkeypatch):
 
     assert result == {"deleted": "e1"}
     assert events.calls["delete"]["eventId"] == "e1"
+
+
+def test_update_event_sends_only_the_given_fields(monkeypatch):
+    events = _FakeEventsResource(
+        patch_result={"id": "e1", "summary": "Renamed", "start": {"dateTime": "2026-10-05T09:00:00+06:00"}, "end": {"dateTime": "2026-10-05T09:00:00+06:00"}}
+    )
+    _patch_service(monkeypatch, events)
+
+    result = google_calendar.update_event("e1", summary="Renamed")
+
+    assert result["summary"] == "Renamed"
+    assert events.calls["patch"]["eventId"] == "e1"
+    assert events.calls["patch"]["body"] == {"summary": "Renamed"}
+
+
+def test_update_event_rejects_an_invalid_start(monkeypatch):
+    events = _FakeEventsResource()
+    events.patch = lambda **kw: (_ for _ in ()).throw(AssertionError("should never reach the API"))
+    _patch_service(monkeypatch, events)
+
+    with pytest.raises(GoogleCalendarError, match="not a real ISO 8601 datetime"):
+        google_calendar.update_event("e1", start="not-a-date")
+
+
+def test_update_event_raises_google_calendar_error_on_http_error(monkeypatch):
+    events = _FakeEventsResource()
+    events.patch = lambda **kw: (_ for _ in ()).throw(_http_error(404, "not found"))
+    _patch_service(monkeypatch, events)
+
+    with pytest.raises(GoogleCalendarError, match="Could not update"):
+        google_calendar.update_event("does-not-exist", summary="x")
 
 
 def test_delete_event_raises_google_calendar_error_on_http_error(monkeypatch):

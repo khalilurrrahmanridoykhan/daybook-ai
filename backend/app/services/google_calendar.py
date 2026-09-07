@@ -161,3 +161,39 @@ def delete_event(event_id: str) -> dict[str, Any]:
     except HttpError as e:
         raise GoogleCalendarError(f"Could not delete calendar event: {e}") from e
     return {"deleted": event_id}
+
+
+def update_event(
+    event_id: str,
+    summary: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    """A partial update (PATCH, not PUT) -- only the fields given here are
+    changed; everything else on the event is left as-is."""
+    if start is not None:
+        _validate_iso_datetime(start, "start")
+    if end is not None:
+        _validate_iso_datetime(end, "end")
+
+    body: dict[str, Any] = {}
+    if summary is not None:
+        body["summary"] = summary
+    if start is not None:
+        body["start"] = {"dateTime": start, "timeZone": settings.local_timezone}
+    if end is not None:
+        body["end"] = {"dateTime": end, "timeZone": settings.local_timezone}
+    if description is not None:
+        body["description"] = description
+
+    try:
+        event = (
+            _get_service()
+            .events()
+            .patch(calendarId=settings.google_calendar_id, eventId=event_id, body=body)
+            .execute()
+        )
+    except HttpError as e:
+        raise GoogleCalendarError(f"Could not update calendar event: {e}") from e
+    return _summarize_event(event)

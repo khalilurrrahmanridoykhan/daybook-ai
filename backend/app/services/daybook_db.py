@@ -150,6 +150,34 @@ def reschedule_task(task_id: str, due_at: str) -> dict:
     return _update_task(task_id, dueAt=due_at)
 
 
+def update_task(
+    task_id: str,
+    title: str | None = None,
+    details: str | None = None,
+    priority: str | None = None,
+    due_at: str | None = None,
+    status: str | None = None,
+) -> dict:
+    """General-purpose edit -- the one path both the dashboard's edit form
+    and its status-checkbox toggle use, so "mark done" is never a
+    separately-maintained code path from a full edit."""
+    fields: dict[str, Any] = {}
+    if title is not None:
+        fields["title"] = title
+    if details is not None:
+        fields["details"] = details
+    if priority is not None:
+        fields["priority"] = priority
+    if due_at is not None:
+        fields["dueAt"] = due_at
+    if status is not None:
+        fields["status"] = status
+        fields["completedAt"] = _now() if status == "DONE" else None
+    if not fields:
+        raise DaybookDbError("No fields given to update")
+    return _update_task(task_id, **fields)
+
+
 def delete_task(task_id: str) -> dict:
     user_id = get_user_id()
     with _connect() as conn, conn.cursor() as cur:
@@ -419,3 +447,31 @@ def add_transaction(
         row = cur.fetchone()
         conn.commit()
         return row
+
+
+def list_transactions(month: str | None = None) -> list[dict]:
+    user_id = get_user_id()
+    month = month or _current_month()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute('SELECT id FROM "BudgetMonth" WHERE "userId" = %s AND month = %s', (user_id, month))
+        budget_month = cur.fetchone()
+        if not budget_month:
+            return []
+        cur.execute(
+            'SELECT t.id, t."categoryId", c.name AS "categoryName", t."walletId", t.amount, t.direction, t.note, t."spentAt" '
+            'FROM "Transaction" t JOIN "Category" c ON c.id = t."categoryId" '
+            'WHERE t."budgetMonthId" = %s ORDER BY t."spentAt" DESC LIMIT 200',
+            (budget_month["id"],),
+        )
+        return cur.fetchall()
+
+
+def delete_transaction(transaction_id: str) -> dict:
+    user_id = get_user_id()
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute('DELETE FROM "Transaction" WHERE id = %s AND "userId" = %s', (transaction_id, user_id))
+        deleted = cur.rowcount > 0
+        conn.commit()
+    if not deleted:
+        raise DaybookDbError(f"No transaction with id {transaction_id}")
+    return {"deleted": True}
