@@ -109,6 +109,27 @@ def test_a_google_calendar_error_becomes_a_tool_error(monkeypatch):
         tools.list_calendar_events()
 
 
+def test_send_notification_calls_notify_send(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(tools.notify, "send", lambda **kw: captured.update(kw))
+
+    result = tools.send_notification(message="Budget alert", title="DayBook AI")
+
+    assert result == {"sent": True}
+    assert captured == {"message": "Budget alert", "title": "DayBook AI"}
+
+
+def test_a_notify_error_becomes_a_tool_error(monkeypatch):
+    from app.services.notify import NotifyError
+
+    def boom(**kw):
+        raise NotifyError("No ntfy topic configured")
+
+    monkeypatch.setattr(tools.notify, "send", boom)
+    with pytest.raises(ToolError, match="No ntfy topic configured"):
+        tools.send_notification(message="hi")
+
+
 def test_call_tool_dispatches_by_name(monkeypatch):
     monkeypatch.setattr(tools.daybook_db, "complete_task", lambda **kw: {"id": kw["task_id"], "status": "DONE"})
     result = call_tool("complete_task", {"task_id": "t1"})

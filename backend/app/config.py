@@ -79,5 +79,12 @@ class Settings(BaseSettings):
     # session. Generate with scripts/create_voice_api_key.py.
     voice_api_key: str = ""
 
+    # Push notifications (Mac + iPhone) via ntfy -- a plain HTTP POST to a
+    # topic URL, no account or SDK. The topic name is the only thing
+    # standing between "private" and "anyone who guesses it" on the free
+    # public server, so it should be long and random, not a plain word.
+    ntfy_base_url: str = "https://ntfy.sh"
+    ntfy_topic: str = ""
+
 
 settings = Settings()

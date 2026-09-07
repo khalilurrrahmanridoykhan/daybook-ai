@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.daybookai.notify</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>__SCRIPT_PATH__</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NTFY_TOPIC</key>
+        <string>__NTFY_TOPIC__</string>
+        <key>NTFY_BASE_URL</key>
+        <string>https://ntfy.sh</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__LOG_PATH__</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_PATH__</string>
+</dict>
+</plist>

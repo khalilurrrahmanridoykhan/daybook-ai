@@ -6,9 +6,10 @@ do is always visible in one place.
 
 Every tool here (except current_datetime) is a thin wrapper around either
 daybook_db, which talks directly to a self-hosted Postgres database using
-Daybook's own schema, or google_calendar, for reminders/events on the
-user's real Google Calendar. daybook_client.py (an HTTP bridge to a real
-Daybook deployment) still exists, tested and ready, for when a real
+Daybook's own schema; google_calendar, for events/reminders on the user's
+real Google Calendar; or notify, for an immediate push notification (via
+ntfy) to the user's phone/Mac. daybook_client.py (an HTTP bridge to a
+real Daybook deployment) still exists, tested and ready, for when a real
 Daybook app is deployed separately and this backend no longer owns the
 database directly.
 """
@@ -20,9 +21,10 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.services import daybook_db, google_calendar
+from app.services import daybook_db, google_calendar, notify
 from app.services.daybook_db import DaybookDbError
 from app.services.google_calendar import GoogleCalendarError
+from app.services.notify import NotifyError
 
 
 class ToolError(RuntimeError):
@@ -176,6 +178,18 @@ def create_calendar_event(
 
 def delete_calendar_event(event_id: str) -> dict[str, Any]:
     return _wrap_calendar(google_calendar.delete_event, event_id=event_id)
+
+
+def send_notification(message: str, title: str | None = None) -> dict[str, Any]:
+    """Pushes a real notification to the user's phone/Mac right now (via
+    ntfy) -- distinct from a calendar reminder, which fires later at a
+    scheduled time. Use this for an immediate heads-up the user explicitly
+    asked for ("let me know now that...", "notify me that...")."""
+    try:
+        notify.send(message=message, title=title)
+    except NotifyError as e:
+        raise ToolError(str(e)) from e
+    return {"sent": True}
 
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
@@ -387,6 +401,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {"event_id": {"type": "string"}}, "required": ["event_id"]},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_notification",
+            "description": "Push a real notification to the user's phone/Mac right now, via ntfy. Use this for an immediate heads-up the user explicitly asked for -- distinct from a calendar reminder, which fires later at a scheduled time, not now.",
+            "parameters": {
+                "type": "object",
+                "properties": {"message": {"type": "string"}, "title": {"type": "string"}},
+                "required": ["message"],
+            },
+        },
+    },
 ]
 
 TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
@@ -407,6 +433,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "list_calendar_events": list_calendar_events,
     "create_calendar_event": create_calendar_event,
     "delete_calendar_event": delete_calendar_event,
+    "send_notification": send_notification,
 }
 
 
