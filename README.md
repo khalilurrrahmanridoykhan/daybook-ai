@@ -74,6 +74,25 @@ Reminders and events go through the real Google Calendar API, not a Daybook feat
 
 The token file is a live credential (already covered by `.gitignore`) -- never commit it. `LOCAL_TIMEZONE` (default `Asia/Dhaka`) is the one setting both `current_datetime` and new calendar events use, so the two can't silently drift apart.
 
+## Installing it as an app (PWA)
+
+The frontend is a real installable web app, not just a page: `app/manifest.ts` plus the icon set in `frontend/public/` are what make "Add to Home Screen" (iPhone) and "Add to Dock" (Mac, Safari) treat it as a standalone app -- its own icon, full-screen, no browser chrome -- instead of a bookmark. No extra setup needed; it's live at [ai.krrkhan.com](https://ai.krrkhan.com) already.
+
+## Voice, via Siri Shortcuts
+
+`POST /api/voice/ask` (`app/api/voice.py`) is a separate, single-shot, non-streaming endpoint built specifically for an iOS/macOS Shortcut triggered by a custom Siri phrase ("Hey Siri, talk to my assistant") -- a Shortcut can't consume Server-Sent Events or hold the web app's login cookie, so this takes a static bearer token instead (`VOICE_API_KEY`, generate with `scripts/create_voice_api_key.py`) and returns one plain `{"reply": "..."}` JSON object. Every voice question lands in one persistent "Voice (Siri)" session, visible in the same chat history sidebar as everything else -- not a separate hidden log.
+
+Setup: build a Shortcut with one action ("Get Contents of URL", POST, `Authorization: Bearer <VOICE_API_KEY>`, JSON body `{"message": "<Shortcut Input>"}`), then Add to Siri with your chosen phrase. Speak your whole question in one breath right after the phrase, since Siri passes anything said after it straight in as the shortcut's input.
+
+## Push notifications (ntfy)
+
+`app/services/notify.py` pushes to [ntfy](https://ntfy.sh) -- a plain HTTP POST to a topic URL, no account, no push certificate to manage. Set `NTFY_TOPIC` in `.env` to a long, random string (this is the only thing standing between private and "anyone who finds this topic name" on the free public server -- never a plain word, and never commit the real value to this public repo).
+
+- **iPhone**: install the free ntfy app, subscribe to your topic. Done.
+- **Mac**: `mac-notify/` is a small always-on background bridge (a `launchd` LaunchAgent, no Dock icon, no window) that subscribes to the topic and shows each message as a real macOS notification via `osascript`. Copy `mac_ntfy_notify.py` somewhere stable, fill in `com.daybookai.notify.plist.template`'s `__SCRIPT_PATH__`/`__NTFY_TOPIC__`/`__LOG_PATH__`, drop it in `~/Library/LaunchAgents/`, and `launchctl load` it. (Live-debugged on macOS 26: `terminal-notifier`, the usual way to get a *clickable* notification, could not register for permission at all on that OS version -- plain `osascript` worked immediately instead, under the already-permitted "Script Editor" identity. The tradeoff is no click-to-open.)
+- The model can also push one immediately when explicitly asked, via the `send_notification` tool -- distinct from a scheduled calendar reminder.
+- `scripts/daily_briefing.py` composes a real summary (open tasks, today's events, this month's budget) from the exact same functions the chat tools use, and pushes it once a day via cron. Each section fails independently, so Google Calendar not being connected yet never blocks the tasks/budget sections from still going out.
+
 ## Adding to its knowledge
 
 Drop a `.md` or `.txt` file into `backend/data/knowledge/` and restart the backend -- paragraphs are chunked (max ~800 chars, never split mid-paragraph) and embedded automatically.
@@ -85,7 +104,7 @@ cd backend
 USE_LOCAL_EMBEDDER=true pytest tests/ -v
 ```
 
-112 tests, all offline (mocked HTTP transport for the Ollama client and the Daybook bridge client, a fake Google Calendar service object, a local hashing embedder for RAG, an in-memory SQLite DB for memory) -- no live Ollama daemon, Daybook deployment, or Google account required to run the suite.
+159 tests, all offline (mocked HTTP transport for the Ollama client, the Daybook bridge client, and ntfy, a fake Google Calendar service object, a local hashing embedder for RAG, an in-memory SQLite DB for memory) -- no live Ollama daemon, Daybook deployment, Google account, or ntfy server required to run the suite.
 
 ## Deployment notes (this project's own VPS deployment)
 
