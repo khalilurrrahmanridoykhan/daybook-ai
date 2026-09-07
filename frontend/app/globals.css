@@ -435,10 +435,33 @@ body {
   gap: 8px;
   padding: 7px 6px;
   border-radius: 8px;
+  border-top: 2px solid transparent;
 }
 
 .panel-item:hover {
   background: var(--panel-raised);
+}
+
+.panel-item.drag-over {
+  border-top-color: var(--accent);
+}
+
+.item-drag-handle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.panel-item:hover .item-drag-handle {
+  opacity: 1;
+}
+
+.item-drag-handle:active {
+  cursor: grabbing;
 }
 
 .item-check {

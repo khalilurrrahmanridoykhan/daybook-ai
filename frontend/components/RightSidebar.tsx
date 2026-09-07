@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, CircleCheck, ListTodo, Plus, Trash2, Wallet } from "lucide-react";
+import { CalendarDays, CircleCheck, GripVertical, ListTodo, Plus, Trash2, Wallet } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8300";
 
@@ -84,6 +84,8 @@ function TasksPanel() {
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   async function refresh() {
     try {
@@ -144,6 +146,31 @@ function TasksPanel() {
     }
   }
 
+  function handleDrop(targetId: string) {
+    setDragOverId(null);
+    const sourceId = draggedId;
+    setDraggedId(null);
+    if (!sourceId || sourceId === targetId) return;
+
+    setTasks((prev) => {
+      const next = [...prev];
+      const from = next.findIndex((t) => t.id === sourceId);
+      const to = next.findIndex((t) => t.id === targetId);
+      if (from === -1 || to === -1) return prev;
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+
+      apiFetch("/api/tasks/reorder", { method: "POST", body: JSON.stringify({ task_ids: next.map((t) => t.id) }) }).catch(
+        (e) => {
+          setError(e instanceof Error ? e.message : "Failed to save the new order");
+          refresh();
+        }
+      );
+
+      return next;
+    });
+  }
+
   return (
     <div className="panel">
       <div className="panel-add-row">
@@ -161,7 +188,31 @@ function TasksPanel() {
       <div className="panel-list">
         {tasks.length === 0 && !error && <div className="panel-empty">No tasks</div>}
         {tasks.map((t) => (
-          <div key={t.id} className="panel-item">
+          <div
+            key={t.id}
+            className={`panel-item ${dragOverId === t.id ? "drag-over" : ""}`}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (dragOverId !== t.id) setDragOverId(t.id);
+            }}
+            onDragLeave={() => setDragOverId((id) => (id === t.id ? null : id))}
+            onDrop={(e) => {
+              e.preventDefault();
+              handleDrop(t.id);
+            }}
+          >
+            <span
+              className="item-drag-handle"
+              draggable
+              onDragStart={() => setDraggedId(t.id)}
+              onDragEnd={() => {
+                setDraggedId(null);
+                setDragOverId(null);
+              }}
+              title="Drag to reorder"
+            >
+              <GripVertical size={14} />
+            </span>
             <button
               type="button"
               className={`item-check ${t.status === "DONE" ? "checked" : ""}`}

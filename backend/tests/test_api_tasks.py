@@ -109,6 +109,28 @@ def test_delete_task_succeeds(monkeypatch):
     assert resp.json() == {"deleted": True}
 
 
+def test_reorder_tasks_passes_the_full_id_list_through(monkeypatch):
+    import app.api.tasks as tasks_api
+
+    captured = {}
+    monkeypatch.setattr(tasks_api.daybook_db, "reorder_tasks", lambda task_ids: captured.update(task_ids=task_ids))
+    client = _authed_client(monkeypatch)
+
+    resp = client.post("/api/tasks/reorder", json={"task_ids": ["t3", "t1", "t2"]})
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    assert captured["task_ids"] == ["t3", "t1", "t2"]
+
+
+def test_reorder_tasks_requires_auth():
+    from app.main import app
+
+    with TestClient(app) as client:
+        resp = client.post("/api/tasks/reorder", json={"task_ids": []})
+    assert resp.status_code == 401
+
+
 def test_a_connection_error_becomes_a_502_not_a_404(monkeypatch):
     import app.api.tasks as tasks_api
 

@@ -11,6 +11,13 @@ class TaskCreate(BaseModel):
     tags: list[str] | None = None
 
 
+class ReorderTasksRequest(BaseModel):
+    """task_ids is the complete new top-to-bottom order (drag-and-drop) --
+    every task's sortOrder becomes its index in this list."""
+
+    task_ids: list[str]
+
+
 class TaskUpdate(BaseModel):
     """Every field optional -- a PATCH, not a PUT. Powers both the
     dashboard's edit form and its status-checkbox toggle (set only

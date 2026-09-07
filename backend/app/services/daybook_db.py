@@ -96,7 +96,7 @@ def list_tasks(status: str | None = None, due_before: str | None = None) -> list
     with _connect() as conn, conn.cursor() as cur:
         cur.execute(
             f'SELECT id, title, details, status, priority, "dueAt", tags, "completedAt" '
-            f'FROM "Task" WHERE {" AND ".join(clauses)} ORDER BY "dueAt" ASC NULLS LAST, "sortOrder" ASC LIMIT 100',
+            f'FROM "Task" WHERE {" AND ".join(clauses)} ORDER BY "sortOrder" ASC LIMIT 100',
             params,
         )
         return cur.fetchall()
@@ -113,7 +113,11 @@ def create_task(
     task_id = _new_id()
     now = _now()
     with _connect() as conn, conn.cursor() as cur:
-        cur.execute('SELECT COALESCE(MAX("sortOrder"), 0) + 1 AS next FROM "Task" WHERE "userId" = %s', (user_id,))
+        # A brand-new task sorts before everything else -- "new tasks show
+        # at the top" -- rather than appended to the end, which is why
+        # this subtracts from the current minimum instead of adding to
+        # the max.
+        cur.execute('SELECT COALESCE(MIN("sortOrder"), 0) - 1 AS next FROM "Task" WHERE "userId" = %s', (user_id,))
         sort_order = cur.fetchone()["next"]
         cur.execute(
             'INSERT INTO "Task" (id, "userId", title, details, priority, "dueAt", tags, "sortOrder", "createdAt", "updatedAt") '
@@ -187,6 +191,24 @@ def delete_task(task_id: str) -> dict:
     if not deleted:
         raise DaybookDbError(f"No task with id {task_id}")
     return {"deleted": True}
+
+
+def reorder_tasks(task_ids: list[str]) -> None:
+    """Persists a drag-and-drop reorder: task_ids is the *complete* new
+    top-to-bottom order, and each task's sortOrder becomes its index in
+    that list. A task id that doesn't belong to this user is silently a
+    no-op (the WHERE clause just matches zero rows) rather than an error
+    -- the frontend always sends its own current full list back, so a
+    stale/foreign id here would only ever be a client bug, not something
+    worth surfacing to the user mid-drag."""
+    user_id = get_user_id()
+    with _connect() as conn, conn.cursor() as cur:
+        for index, task_id in enumerate(task_ids):
+            cur.execute(
+                'UPDATE "Task" SET "sortOrder" = %s, "updatedAt" = %s WHERE id = %s AND "userId" = %s',
+                (index, _now(), task_id, user_id),
+            )
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------

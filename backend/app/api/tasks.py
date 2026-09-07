@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.errors import to_http_error
-from app.schemas.tasks import TaskCreate, TaskUpdate
+from app.schemas.tasks import ReorderTasksRequest, TaskCreate, TaskUpdate
 from app.services import daybook_db
 from app.services.daybook_db import DaybookDbError
 
@@ -50,3 +50,12 @@ def delete_task(task_id: str) -> dict:
         return daybook_db.delete_task(task_id)
     except DaybookDbError as e:
         raise to_http_error(e) from e
+
+
+@router.post("/tasks/reorder")
+def reorder_tasks(body: ReorderTasksRequest) -> dict:
+    try:
+        daybook_db.reorder_tasks(body.task_ids)
+    except DaybookDbError as e:
+        raise to_http_error(e) from e
+    return {"ok": True}

@@ -103,18 +103,48 @@ def test_list_tasks_filters_by_status_and_due_before(monkeypatch):
     assert params == ["u1", "TODO", "2026-10-01"]
 
 
-def test_create_task_assigns_next_sort_order(monkeypatch):
+def test_create_task_assigns_sort_order_before_existing_tasks(monkeypatch):
+    """New tasks show at the top of the list -- prepended, not appended --
+    so the sortOrder query must be MIN(...) - 1, never MAX(...) + 1."""
     monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
     cursor = _patch_connect(
         monkeypatch,
-        FakeCursor([{"next": 5}, {"id": "t2", "title": "Call the plumber"}]),
+        FakeCursor([{"next": -1}, {"id": "t2", "title": "Call the plumber"}]),
     )
 
     task = daybook_db.create_task(title="Call the plumber")
 
     assert task == {"id": "t2", "title": "Call the plumber"}
+    sort_order_query, _ = cursor.queries[0]
+    assert "MIN(" in sort_order_query
     insert_query, insert_params = cursor.queries[1]
-    assert insert_params[7] == 5  # sortOrder position in the VALUES tuple
+    assert insert_params[7] == -1  # sortOrder position in the VALUES tuple
+
+
+def test_list_tasks_orders_by_sort_order_not_due_date(monkeypatch):
+    """Manual/drag-and-drop order is the real order -- a due date is a
+    filter (due_before), never the primary sort, so a freshly-created
+    task with no due date still shows at the top rather than falling to
+    the bottom of a due-date sort."""
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    cursor = _patch_connect(monkeypatch, FakeCursor([[]]))
+
+    daybook_db.list_tasks()
+
+    query, _ = cursor.queries[0]
+    assert 'ORDER BY "sortOrder" ASC' in query
+
+
+def test_reorder_tasks_sets_sequential_sort_order(monkeypatch):
+    monkeypatch.setattr(daybook_db, "_user_id_cache", "u1")
+    cursor = _patch_connect(monkeypatch, FakeCursor([]))
+
+    daybook_db.reorder_tasks(["t3", "t1", "t2"])
+
+    sort_orders = [params[0] for _, params in cursor.queries]
+    task_ids = [params[2] for _, params in cursor.queries]
+    assert task_ids == ["t3", "t1", "t2"]
+    assert sort_orders == [0, 1, 2]
 
 
 def test_complete_task_raises_when_task_not_found(monkeypatch):
