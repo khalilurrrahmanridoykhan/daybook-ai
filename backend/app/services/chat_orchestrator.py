@@ -116,17 +116,37 @@ MAX_TOOL_ROUNDS = 3
 # bare word like "added") to keep false positives rare -- see
 # stream_chat_turn's use of it for the bounded, one-time corrective retry
 # this triggers.
+#
+# Live-caught again, after the first fix shipped: the model paraphrased
+# as "Task created: X" (not "added") and "Tasks added:" (plural, for a
+# multi-task request) -- neither matched the original narrower wording.
+# Each noun now covers both "added" and "created", singular and plural,
+# rather than hardcoding one exact phrase per tool.
 _FALSE_ACTION_CLAIM_PATTERN = re.compile(
     r"\b("
-    r"task added|added (a |the )?task|"
-    r"event created|created (the |an )?event|"
-    r"reminder set|set (the |a )?reminder|added to (your |the )?calendar|"
-    r"logged (the |your )?(expense|transaction)|expense (logged|added)|"
+    r"tasks? (has |have )?(been )?(added|created)|(added|created) (a |the |\d+ )?tasks?|"
+    r"events? (has |have )?(been )?created|(created|added) (the |an )?events?|"
+    r"reminders? (has |have )?(been )?set|set (the |a )?reminders?|added to (your |the )?calendar|"
+    r"logged (the |your )?(expense|transaction)s?|expenses? (logged|added)|"
     r"deleted (the|your)|marked (as )?done|"
-    r"budget (has been |was )?set|"
-    r"note (added|created|saved)"
+    r"budgets? (has |have )?(been )?set|"
+    r"notes? (added|created|saved)"
     r")\b",
     re.IGNORECASE,
+)
+
+# Fenced ```json ... ``` block appearing anywhere in a longer response,
+# not just when the whole message is pure JSON (see
+# _parse_embedded_tool_call below).
+_JSON_FENCE_ANYWHERE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+# A bare (unfenced) {"name": ..., "arguments": {...}} object anywhere in
+# a longer response. Deliberately simple (no nested-brace support) --
+# every tool in this project takes flat string/number/boolean arguments,
+# never a nested object or array, so this has always been sufficient in
+# practice; a tool that needed nested arguments would need a real
+# balanced-brace parser instead.
+_BARE_JSON_OBJECT_ANYWHERE_RE = re.compile(
+    r'\{[^{}]*"name"\s*:\s*"[a-zA-Z_]+"[^{}]*"arguments"\s*:\s*\{[^{}]*\}[^{}]*\}', re.DOTALL
 )
 
 # Measured, not assumed: retrieval scores for "hi" (0.43-0.51 against this
@@ -234,6 +254,31 @@ def _parse_fallback_tool_calls(content: str) -> list[dict[str, Any]] | None:
     return calls
 
 
+def _parse_embedded_tool_call(content: str) -> dict[str, Any] | None:
+    """More permissive than _parse_fallback_tool_call: looks for a
+    tool-call-shaped JSON object anywhere in the content -- fenced or
+    bare -- rather than requiring the *whole* trimmed message to be pure
+    JSON. Live-caught: retried after a detected false completion claim
+    (see stream_chat_turn), the model answered "Task created: X" followed
+    by a ```json fenced tool call -- correctly rejected by
+    _parse_fallback_tool_call, which exists specifically to avoid
+    mistaking a real JSON code example for a tool call when it's mixed
+    with prose. That strictness is right for an ordinary round, but
+    during the one corrective retry the model has already been told
+    plainly it did nothing -- a tool-call shape appearing anywhere in
+    what it says next is a much stronger signal, so this is deliberately
+    only used there, never in a normal round.
+    """
+    for match in _JSON_FENCE_ANYWHERE_RE.finditer(content):
+        call = _parse_fallback_tool_call(match.group(1))
+        if call:
+            return call
+    match = _BARE_JSON_OBJECT_ANYWHERE_RE.search(content)
+    if match:
+        return _parse_fallback_tool_call(match.group(0))
+    return None
+
+
 def _build_system_prompt(user_message: str) -> tuple[str, list[dict[str, Any]]]:
     if _is_smalltalk(user_message):
         retrieved = []
@@ -286,6 +331,7 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
     last_tool_error: str | None = None
     any_tool_called = False
     false_claim_retried = False
+    awaiting_retry_response = False
     max_rounds = MAX_TOOL_ROUNDS
 
     _round = 0
@@ -322,6 +368,18 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
             if fallback_calls:
                 tool_calls = fallback_calls
 
+        # Only for the response to our own corrective nudge: try much
+        # harder before giving up, since we already know something went
+        # wrong -- look for a tool-call shape anywhere in the text, not
+        # just when the whole message is pure JSON (see
+        # _parse_embedded_tool_call for why this leniency is scoped to
+        # just this one round).
+        if not tool_calls and awaiting_retry_response:
+            embedded_call = _parse_embedded_tool_call(assistant_content)
+            if embedded_call:
+                tool_calls = [embedded_call]
+        awaiting_retry_response = False
+
         if not tool_calls:
             if suppress_streaming:
                 # Looked like it might become a tool call but didn't parse
@@ -343,6 +401,7 @@ def stream_chat_turn(session_id: str, user_message: str) -> Iterator[dict[str, A
             # as-is rather than looping forever.
             if not any_tool_called and not false_claim_retried and _FALSE_ACTION_CLAIM_PATTERN.search(assistant_content):
                 false_claim_retried = True
+                awaiting_retry_response = True
                 correction = "\n\n(That wasn't actually done yet -- let me do it now.)"
                 final_text_parts.append(correction)
                 yield {"type": "delta", "content": correction}

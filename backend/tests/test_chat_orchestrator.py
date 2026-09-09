@@ -8,8 +8,10 @@ from app.rag.embeddings import LocalHashingEmbedder
 from app.rag.store import Document, InMemoryVectorStore, ScoredDocument
 from app.services import chat_orchestrator, memory, tools
 from app.services.chat_orchestrator import (
+    _FALSE_ACTION_CLAIM_PATTERN,
     _build_system_prompt,
     _is_smalltalk,
+    _parse_embedded_tool_call,
     _parse_fallback_tool_call,
     _parse_fallback_tool_calls,
 )
@@ -667,3 +669,73 @@ def test_stream_chat_turn_does_not_retry_when_a_tool_was_already_called(monkeypa
     assert deltas == "Task added: Buy milk."  # no self-correction appended
     tool_calls = [e for e in events if e["type"] == "tool_call"]
     assert len(tool_calls) == 1  # not retried a second time
+
+
+def test_false_action_claim_pattern_catches_created_not_just_added():
+    """Live-caught, after the first fix shipped: the model paraphrased as
+    'Task created: X' -- the original pattern only covered 'added'."""
+    assert _FALSE_ACTION_CLAIM_PATTERN.search("Task created: Make the GeoAI Models Building.")
+    assert _FALSE_ACTION_CLAIM_PATTERN.search("Tasks added:\n1. FHIR Learning H to P")
+    assert _FALSE_ACTION_CLAIM_PATTERN.search("I've created the task for you.")
+
+
+def test_parse_embedded_tool_call_finds_a_fenced_call_after_prose():
+    """Live-caught: retried after a false claim, the model answered
+    'Task created: X' followed by a ```json fenced tool call --
+    _parse_fallback_tool_call correctly rejects this (prose + JSON, not
+    pure JSON), which is exactly why the more permissive
+    _parse_embedded_tool_call exists as a retry-only fallback."""
+    content = 'Task created: U-Net Model!\n\n```json\n{"name": "create_task", "arguments": {"title": "U-Net Model!"}}\n```'
+    call = _parse_embedded_tool_call(content)
+    assert call == {"function": {"name": "create_task", "arguments": {"title": "U-Net Model!"}}}
+
+
+def test_parse_embedded_tool_call_finds_a_bare_call_after_prose():
+    content = 'Done! {"name": "current_datetime", "arguments": {}} there you go'
+    call = _parse_embedded_tool_call(content)
+    assert call == {"function": {"name": "current_datetime", "arguments": {}}}
+
+
+def test_parse_embedded_tool_call_returns_none_for_ordinary_prose():
+    assert _parse_embedded_tool_call("Sure, I can help with that. What's the task?") is None
+
+
+def test_stream_chat_turn_recovers_via_embedded_call_when_retry_still_fails_to_call_cleanly(monkeypatch, tmp_path):
+    """The exact live-caught sequence: false claim ('Task created: X',
+    the paraphrase the original regex missed) -> corrective retry -> the
+    retry's own response is prose followed by a fenced tool call instead
+    of a clean structured/fallback call -- must still execute for real
+    rather than showing the raw JSON and giving up."""
+    _empty_knowledge_store(monkeypatch)
+    monkeypatch.setattr(chat_orchestrator.settings, "memory_db_path", str(tmp_path / "mem.sqlite3"))
+    monkeypatch.setattr(tools.daybook_db, "create_task", lambda **kw: {"id": "t1", "title": kw["title"]})
+    monkeypatch.setattr(
+        chat_orchestrator.ollama_client,
+        "chat_stream",
+        _fake_chat_stream(
+            [
+                [{"message": {"content": "Task created: U-Net Model!"}, "done": True}],
+                [
+                    {
+                        "message": {
+                            "content": (
+                                'Task created: U-Net Model!\n\n```json\n{"name": "create_task", '
+                                '"arguments": {"title": "U-Net Model!"}}\n```'
+                            )
+                        },
+                        "done": True,
+                    }
+                ],
+                [{"message": {"content": "Done -- U-Net Model added for real."}, "done": True}],
+            ]
+        ),
+    )
+
+    session_id = memory.create_session()
+    events = list(chat_orchestrator.stream_chat_turn(session_id, "Add a task: U-Net Model!"))
+
+    tool_calls = [e for e in events if e["type"] == "tool_call"]
+    assert tool_calls == [{"type": "tool_call", "name": "create_task", "arguments": {"title": "U-Net Model!"}}]
+
+    deltas = "".join(e["content"] for e in events if e["type"] == "delta")
+    assert deltas.endswith("Done -- U-Net Model added for real.")
